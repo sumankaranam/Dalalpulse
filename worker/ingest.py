@@ -79,7 +79,10 @@ class DataIngestor:
     def fetch_reddit(self, subreddits: List[str], limit: int = 50) -> List[Dict[str, Any]]:
         """Fetches posts from Reddit public JSON feeds."""
         posts = []
-        headers = {"User-Agent": DEFAULT_USER_AGENT}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+        }
 
         for sub in subreddits:
             url = f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}"
@@ -265,15 +268,21 @@ class DataIngestor:
         self.prune_old_records(retention_days=30)
         return saved
 
-    def get_posts_df(self, days: int = 14):
-        """Retrieves posts within the last N days as a pandas DataFrame."""
+    def get_posts_df(self, days: int = 14, since: Optional[datetime] = None):
+        """Retrieves posts within the last N days or since a specific timestamp as a pandas DataFrame."""
         conn = self._get_connection()
         try:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-            df = conn.execute(
-                "SELECT * FROM scraped_posts WHERE created_utc >= ? ORDER BY created_utc DESC",
-                [cutoff]
-            ).fetchdf()
+            if since:
+                df = conn.execute(
+                    "SELECT * FROM scraped_posts WHERE scraped_at >= ? OR created_utc >= ? ORDER BY scraped_at DESC",
+                    [since, since]
+                ).fetchdf()
+            else:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                df = conn.execute(
+                    "SELECT * FROM scraped_posts WHERE created_utc >= ? ORDER BY created_utc DESC",
+                    [cutoff]
+                ).fetchdf()
             return df
         finally:
             conn.close()

@@ -70,8 +70,8 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
         )
         log(f"   ✓ Ingestion complete: {total_scraped} raw posts stored.")
 
-        # Load recent posts for signal processing
-        df = ingestor.get_posts_df(days=1)
+        # Load recent posts for signal processing (last 48 hours to capture active discussion threads)
+        df = ingestor.get_posts_df(days=2)
         if df.empty:
             log("⚠️ No recent posts available in local DuckDB to process.")
             sync.update_run_log(run_id, status="success", posts_scraped=total_scraped, duration_seconds=time.time() - start_time, logs="\n".join(logs))
