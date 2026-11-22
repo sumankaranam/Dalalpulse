@@ -33,7 +33,7 @@ class BriefSynthesizer:
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
             # Try latest available Gemini models
-            for m in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]:
+            for m in ["gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-pro-latest"]:
                 try:
                     self.client = genai.GenerativeModel(
                         model_name=m,

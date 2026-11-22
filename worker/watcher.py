@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config_sync import SupabaseSync
 from pipeline import run_pipeline
 
-POLL_INTERVAL_SECONDS = int(os.getenv("WATCHER_POLL_INTERVAL", "60"))
+POLL_INTERVAL_SECONDS = int(os.getenv("WATCHER_POLL_INTERVAL", "5"))
 
 def start_watcher():
     print(f"👀 DalalPulse Watcher active. Polling Supabase every {POLL_INTERVAL_SECONDS}s...", flush=True)
@@ -33,7 +33,11 @@ def start_watcher():
                 run_pipeline(trigger_source="manual_web")
                 print(f"✅ On-demand pipeline completed. Resuming polling...", flush=True)
         except Exception as e:
-            print(f"[watcher] Error during poll cycle: {e}", flush=True)
+            print(f"[watcher] Error during poll cycle: {e}. Reinitializing connection...", flush=True)
+            try:
+                sync = SupabaseSync()
+            except Exception:
+                pass
 
         time.sleep(POLL_INTERVAL_SECONDS)
 

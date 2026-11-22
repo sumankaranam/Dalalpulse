@@ -5,10 +5,10 @@ import Link from "next/link";
 import { 
   TrendingUp, TrendingDown, Minus, Flame, AlertTriangle, 
   MessageSquare, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Quote,
-  Star, Globe, Search, Zap, Sliders, CheckCircle2
+  Star, Globe, Search, Zap, Sliders, CheckCircle2, Clock, Activity, AlertCircle
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { DailySignal } from "@/types";
+import { DailySignal, RunLog } from "@/types";
 
 export default function RadarPage() {
   const [signals, setSignals] = useState<DailySignal[]>([]);
@@ -22,6 +22,10 @@ export default function RadarPage() {
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [triggeringMode, setTriggeringMode] = useState<string | null>(null);
   const [triggerNotice, setTriggerNotice] = useState<string | null>(null);
+  
+  // Real-time run tracking
+  const [latestRun, setLatestRun] = useState<RunLog | null>(null);
+  const [isPipelineRunning, setIsPipelineRunning] = useState(false);
 
   const fetchSignalsAndConfig = async () => {
     if (!supabase) {
@@ -59,6 +63,19 @@ export default function RadarPage() {
       if (!cfgErr && cfgData?.watchlist_tickers) {
         setWatchlistTickers(cfgData.watchlist_tickers);
       }
+
+      // 3. Fetch Latest Run Telemetry
+      const { data: runData, error: runErr } = await supabase
+        .from("run_logs")
+        .select("*")
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!runErr && runData) {
+        setLatestRun(runData as RunLog);
+        setIsPipelineRunning(runData.status === "running");
+      }
     } catch (err) {
       console.error("Error fetching signals/config:", err);
     } finally {
@@ -68,14 +85,44 @@ export default function RadarPage() {
 
   useEffect(() => {
     fetchSignalsAndConfig();
-    const interval = setInterval(fetchSignalsAndConfig, 30000); // 30s auto-refresh
+    const interval = setInterval(fetchSignalsAndConfig, 25000); // 25s auto-refresh
     return () => clearInterval(interval);
   }, []);
+
+  // Fast polling while pipeline is running
+  useEffect(() => {
+    if (!isPipelineRunning) return;
+    const pollTimer = setInterval(async () => {
+      if (!supabase) return;
+      try {
+        const { data: runData } = await supabase
+          .from("run_logs")
+          .select("*")
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (runData) {
+          setLatestRun(runData as RunLog);
+          if (runData.status !== "running") {
+            setIsPipelineRunning(false);
+            // Refresh data upon run completion
+            fetchSignalsAndConfig();
+          }
+        }
+      } catch (err) {
+        console.error("Error polling run_logs:", err);
+      }
+    }, 3000);
+
+    return () => clearInterval(pollTimer);
+  }, [isPipelineRunning]);
 
   const triggerRun = async (mode: 'watchlist_only' | 'all_radar', targetTicker?: string) => {
     if (!supabase || triggeringMode) return;
     const modeKey = targetTicker || mode;
     setTriggeringMode(modeKey);
+    setIsPipelineRunning(true);
     try {
       await supabase
         .from("pipeline_config")
@@ -88,16 +135,26 @@ export default function RadarPage() {
 
       setTriggerNotice(
         targetTicker 
-          ? `⚡ Worker triggered for ${targetTicker}! Polling forums and X now...` 
+          ? `⚡ Worker triggered for ${targetTicker}! Polling Reddit, X, Moneycontrol now...` 
           : mode === 'watchlist_only'
           ? `⚡ Radar run queued exclusively for your ${watchlistTickers.length} Watchlist stocks!`
           : "🌐 Full Market Scan queued across 2,600+ NSE stocks!"
       );
-      setTimeout(() => setTriggerNotice(null), 6000);
+      setTimeout(() => setTriggerNotice(null), 8000);
     } catch (err) {
       console.error("Trigger error:", err);
     } finally {
       setTriggeringMode(null);
+    }
+  };
+
+  const formatDateTime = (iso?: string) => {
+    if (!iso) return "";
+    try {
+      const d = new Date(iso);
+      return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    } catch {
+      return "";
     }
   };
 
@@ -182,6 +239,59 @@ export default function RadarPage() {
         </div>
       </div>
 
+      {/* Real-time Execution Banner */}
+      {isPipelineRunning ? (
+        <div className="bg-sky-950/70 border border-sky-500/60 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg shadow-sky-950/30">
+          <div className="flex items-center space-x-3">
+            <div className="relative flex items-center justify-center flex-shrink-0">
+              <RefreshCw className="w-5 h-5 text-sky-400 animate-spin" />
+              <span className="absolute w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold text-sky-200">Radar Pipeline Active — Processing Live</span>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-sky-900/80 border border-sky-600/50 text-sky-300 font-mono">
+                  RTX 4050 GPU
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300 mt-0.5">
+                Scraping Reddit, X (Twitter), Moneycontrol & ValuePickr → FinBERT sentiment scoring...
+              </p>
+            </div>
+          </div>
+          <div className="text-right flex items-center sm:block space-x-2 sm:space-x-0">
+            <span className="text-[11px] text-slate-400">Trigger: {latestRun?.trigger_source || "Web"}</span>
+            <span className="text-[10px] text-sky-400 font-mono font-medium block">Auto-updating screen...</span>
+          </div>
+        </div>
+      ) : latestRun ? (
+        <div className="bg-[#121826]/90 border border-radar-border rounded-xl px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center space-x-2 text-slate-300">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <span>
+              Last Radar Run: <strong className="text-white">{formatDateTime(latestRun.completed_at || latestRun.started_at)}</strong>
+            </span>
+            <span className="text-slate-600">•</span>
+            <span className="text-slate-400">{latestRun.signals_generated} signals generated</span>
+            <span className="text-slate-600">•</span>
+            <span className="text-slate-400">{latestRun.posts_scraped} posts scraped</span>
+            {latestRun.duration_seconds && (
+              <>
+                <span className="text-slate-600">•</span>
+                <span className="text-slate-400">{Math.round(latestRun.duration_seconds)}s execution</span>
+              </>
+            )}
+          </div>
+          <button
+            onClick={() => fetchSignalsAndConfig()}
+            className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-[11px] text-slate-300 hover:text-white transition-colors"
+          >
+            <RefreshCw className="w-3 h-3" />
+            <span>Refresh View</span>
+          </button>
+        </div>
+      ) : null}
+
       {/* Trigger Feedback Toast */}
       {triggerNotice && (
         <div className="bg-sky-950/80 border border-sky-500/60 text-sky-200 p-3 rounded-xl flex items-center justify-between text-xs animate-in fade-in slide-in-from-top-1 duration-200">
@@ -251,13 +361,13 @@ export default function RadarPage() {
             <>
               <button
                 onClick={() => triggerRun("watchlist_only")}
-                disabled={!!triggeringMode}
-                className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-semibold active:scale-95 transition-all"
+                disabled={isPipelineRunning || !!triggeringMode}
+                className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-semibold active:scale-95 transition-all disabled:opacity-60"
               >
-                {triggeringMode === "watchlist_only" ? (
+                {isPipelineRunning && triggeringMode === "watchlist_only" ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Queuing Watchlist...</span>
+                    <span>Running Watchlist...</span>
                   </>
                 ) : (
                   <>
@@ -278,10 +388,10 @@ export default function RadarPage() {
           ) : (
             <button
               onClick={() => triggerRun("all_radar")}
-              disabled={!!triggeringMode}
-              className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/40 text-sky-300 text-xs font-semibold active:scale-95 transition-all"
+              disabled={isPipelineRunning || !!triggeringMode}
+              className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/40 text-sky-300 text-xs font-semibold active:scale-95 transition-all disabled:opacity-60"
             >
-              {triggeringMode === "all_radar" ? (
+              {isPipelineRunning && triggeringMode === "all_radar" ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                   <span>Scanning Market...</span>
@@ -605,8 +715,8 @@ export default function RadarPage() {
 
                     <button
                       onClick={() => triggerRun("watchlist_only", ticker)}
-                      disabled={triggeringMode === ticker}
-                      className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium flex items-center space-x-1 active:scale-95 transition-all"
+                      disabled={isPipelineRunning || triggeringMode === ticker}
+                      className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium flex items-center space-x-1 active:scale-95 transition-all disabled:opacity-50"
                     >
                       <Zap className="w-3 h-3 text-amber-400" />
                       <span>{triggeringMode === ticker ? "Queuing..." : `Scan ${ticker}`}</span>
