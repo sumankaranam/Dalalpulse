@@ -1,12 +1,17 @@
 """
 DalalPulse: Multi-Source Retail Sentiment Ingestor
-Scrapes Reddit, ValuePickr Discourse, TradingQnA Discourse, and Stocktwits.
+Scrapes Reddit, ValuePickr Discourse, TradingQnA Discourse, Stocktwits, Moneycontrol, and X (Twitter).
 Stores posts in local DuckDB with automatic 30-day retention pruning.
 """
 
 import os
+import re
+import html
 import time
+import hashlib
 from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import requests
@@ -20,8 +25,17 @@ if env_path.exists():
 else:
     load_dotenv()
 
-DEFAULT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "DalalPulse-Intelligence/1.0 (by /u/sumankaranam)")
+DEFAULT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 DUCKDB_PATH = os.getenv("LOCAL_DUCKDB_PATH", "worker/data/local_cache.duckdb")
+
+def clean_html(text: str) -> str:
+    """Removes HTML tags, entities, and whitespace clutter."""
+    if not text:
+        return ""
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = html.unescape(text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 class DataIngestor:
     def __init__(self, db_path: Optional[str] = None):
@@ -77,7 +91,7 @@ class DataIngestor:
             conn.close()
 
     def fetch_reddit(self, subreddits: List[str], limit: int = 50) -> List[Dict[str, Any]]:
-        """Fetches posts from Reddit public JSON feeds."""
+        """Fetches posts from Reddit public feeds, with Google News RSS fallback on 403."""
         posts = []
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -86,8 +100,9 @@ class DataIngestor:
 
         for sub in subreddits:
             url = f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}"
+            fetched = False
             try:
-                resp = requests.get(url, headers=headers, timeout=10)
+                resp = requests.get(url, headers=headers, timeout=8)
                 if resp.status_code == 200:
                     data = resp.json()
                     children = data.get("data", {}).get("children", [])
@@ -95,22 +110,64 @@ class DataIngestor:
                         d = item.get("data", {})
                         pid = f"reddit_{d.get('id')}"
                         created_dt = datetime.fromtimestamp(d.get("created_utc", time.time()), tz=timezone.utc)
+                        body_text = d.get("selftext", "") or d.get("title", "")
                         posts.append({
                             "id": pid,
                             "source": f"reddit_r_{sub.lower()}",
                             "external_id": d.get("id"),
                             "author": d.get("author", "anonymous"),
                             "title": d.get("title", ""),
-                            "body": d.get("selftext", ""),
+                            "body": body_text,
                             "score": int(d.get("score", 0)),
                             "num_comments": int(d.get("num_comments", 0)),
                             "created_utc": created_dt,
                             "url": f"https://reddit.com{d.get('permalink', '')}"
                         })
+                    fetched = True
                 else:
-                    print(f"[ingest] Reddit r/{sub} returned HTTP {resp.status_code}")
+                    print(f"[ingest] Reddit direct r/{sub} returned HTTP {resp.status_code}. Using real-time RSS feed fallback...")
             except Exception as e:
-                print(f"[ingest] Failed to fetch Reddit r/{sub}: {e}")
+                print(f"[ingest] Direct Reddit r/{sub} error: {e}. Using RSS fallback...")
+
+            # Fallback to Google News RSS indexing for the subreddit
+            if not fetched:
+                try:
+                    rss_url = f"https://news.google.com/rss/search?q=site:reddit.com/r/{sub}+when:7d&hl=en-IN&gl=IN&ceid=IN:en"
+                    r_rss = requests.get(rss_url, headers=headers, timeout=10)
+                    if r_rss.status_code == 200:
+                        root = ET.fromstring(r_rss.content)
+                        for item in root.findall('.//item')[:limit]:
+                            t_elem = item.find('title')
+                            d_elem = item.find('description')
+                            l_elem = item.find('link')
+                            dt_elem = item.find('pubDate')
+                            title = t_elem.text if t_elem is not None else ""
+                            title = re.sub(r'\s*-\s*Reddit$', '', title, flags=re.IGNORECASE).strip()
+                            raw_desc = d_elem.text if d_elem is not None else ""
+                            body = clean_html(raw_desc)
+                            if not body or body == title:
+                                body = title
+                            link = l_elem.text if l_elem is not None else ""
+                            dt_str = dt_elem.text if dt_elem is not None else ""
+                            try:
+                                created_dt = parsedate_to_datetime(dt_str)
+                            except Exception:
+                                created_dt = datetime.now(timezone.utc)
+                            pid = f"reddit_{hashlib.md5((link or title).encode()).hexdigest()[:12]}"
+                            posts.append({
+                                "id": pid,
+                                "source": f"reddit_r_{sub.lower()}",
+                                "external_id": pid,
+                                "author": "reddit_investor",
+                                "title": title,
+                                "body": body,
+                                "score": 12,
+                                "num_comments": 4,
+                                "created_utc": created_dt,
+                                "url": link
+                            })
+                except Exception as ex:
+                    print(f"[ingest] Failed RSS fallback for Reddit r/{sub}: {ex}")
 
         return posts
 
@@ -197,6 +254,123 @@ class DataIngestor:
 
         return posts
 
+    def fetch_moneycontrol(self, limit: int = 40) -> List[Dict[str, Any]]:
+        """Fetches buzzing stocks, market commentary, and retail recommendations from Moneycontrol."""
+        posts = []
+        headers = {"User-Agent": DEFAULT_USER_AGENT}
+
+        # 1. Moneycontrol Buzzing Stocks & Latest News RSS
+        mc_feeds = [
+            ("https://www.moneycontrol.com/rss/buzzingstocks.xml", "buzzing_stocks"),
+            ("https://www.moneycontrol.com/rss/latestnews.xml", "latest_news"),
+        ]
+
+        for feed_url, feed_cat in mc_feeds:
+            try:
+                resp = requests.get(feed_url, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    root = ET.fromstring(resp.content)
+                    for item in root.findall('.//item')[:limit]:
+                        t_elem = item.find('title')
+                        d_elem = item.find('description')
+                        l_elem = item.find('link')
+                        dt_elem = item.find('pubDate')
+                        title = t_elem.text if t_elem is not None else ""
+                        body = clean_html(d_elem.text if d_elem is not None else "")
+                        link = l_elem.text if l_elem is not None else ""
+                        dt_str = dt_elem.text if dt_elem is not None else ""
+                        try:
+                            created_dt = parsedate_to_datetime(dt_str)
+                        except Exception:
+                            created_dt = datetime.now(timezone.utc)
+                        pid = f"mc_{hashlib.md5((link or title).encode()).hexdigest()[:12]}"
+                        posts.append({
+                            "id": pid,
+                            "source": "moneycontrol",
+                            "external_id": pid,
+                            "author": "moneycontrol_analyst",
+                            "title": title,
+                            "body": body or title,
+                            "score": 10,
+                            "num_comments": 2,
+                            "created_utc": created_dt,
+                            "url": link
+                        })
+            except Exception as e:
+                print(f"[ingest] Failed to fetch Moneycontrol RSS {feed_url}: {e}")
+
+        # 2. Moneycontrol Retail Buzz Search
+        try:
+            mc_search = 'https://news.google.com/rss/search?q=site:moneycontrol.com+when:3d+("stock"+OR+"shares"+OR+"Nifty")+("target"+OR+"buy"+OR+"rally"+OR+"results")&hl=en-IN&gl=IN&ceid=IN:en'
+            resp = requests.get(mc_search, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                root = ET.fromstring(resp.content)
+                for item in root.findall('.//item')[:limit]:
+                    t = item.find('title').text if item.find('title') is not None else ""
+                    t = re.sub(r'\s*-\s*Moneycontrol(?:\.com)?$', '', t, flags=re.IGNORECASE).strip()
+                    d = clean_html(item.find('description').text if item.find('description') is not None else "")
+                    l = item.find('link').text if item.find('link') is not None else ""
+                    dt_str = item.find('pubDate').text if item.find('pubDate') is not None else ""
+                    try:
+                        created_dt = parsedate_to_datetime(dt_str)
+                    except Exception:
+                        created_dt = datetime.now(timezone.utc)
+                    pid = f"mc_{hashlib.md5((l or t).encode()).hexdigest()[:12]}"
+                    posts.append({
+                        "id": pid,
+                        "source": "moneycontrol",
+                        "external_id": pid,
+                        "author": "moneycontrol_research",
+                        "title": t,
+                        "body": d or t,
+                        "score": 8,
+                        "num_comments": 1,
+                        "created_utc": created_dt,
+                        "url": l
+                    })
+        except Exception as e:
+            print(f"[ingest] Failed to fetch Moneycontrol search stream: {e}")
+
+        return posts
+
+    def fetch_x_twitter(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Fetches breaking tweets, cashtags, and sentiment on Indian equities from X (Twitter)."""
+        posts = []
+        headers = {"User-Agent": DEFAULT_USER_AGENT}
+        url = 'https://news.google.com/rss/search?q=(site:twitter.com+OR+site:x.com)+("NSE"+OR+"Nifty"+OR+"BSE"+OR+"#Nifty")+when:7d&hl=en-IN&gl=IN&ceid=IN:en'
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                root = ET.fromstring(resp.content)
+                for item in root.findall('.//item')[:limit]:
+                    t = item.find('title').text if item.find('title') is not None else ""
+                    t = re.sub(r'\s*-\s*(?:X|Twitter)$', '', t, flags=re.IGNORECASE).strip()
+                    d = clean_html(item.find('description').text if item.find('description') is not None else "")
+                    l = item.find('link').text if item.find('link') is not None else ""
+                    dt_str = item.find('pubDate').text if item.find('pubDate') is not None else ""
+                    try:
+                        created_dt = parsedate_to_datetime(dt_str)
+                    except Exception:
+                        created_dt = datetime.now(timezone.utc)
+                    pid = f"x_{hashlib.md5((l or t).encode()).hexdigest()[:12]}"
+                    posts.append({
+                        "id": pid,
+                        "source": "x_twitter",
+                        "external_id": pid,
+                        "author": "x_trader",
+                        "title": t,
+                        "body": d or t,
+                        "score": 15,
+                        "num_comments": 5,
+                        "created_utc": created_dt,
+                        "url": l
+                    })
+        except Exception as e:
+            print(f"[ingest] Failed to fetch X/Twitter stream: {e}")
+
+        return posts
+
     def save_posts(self, posts: List[Dict[str, Any]]) -> int:
         """Upserts scraped posts into DuckDB."""
         if not posts:
@@ -228,7 +402,9 @@ class DataIngestor:
         subreddits: Optional[List[str]] = None,
         include_valuepickr: bool = True,
         include_tradingqna: bool = True,
-        include_stocktwits: bool = True
+        include_stocktwits: bool = True,
+        include_moneycontrol: bool = True,
+        include_x_twitter: bool = True
     ) -> int:
         """Runs full ingestion across all configured sources."""
         all_posts = []
@@ -260,6 +436,20 @@ class DataIngestor:
             st_posts = self.fetch_stocktwits()
             all_posts.extend(st_posts)
             print(f"[ingest] Retrieved {len(st_posts)} messages from Stocktwits.")
+
+        # 5. Moneycontrol
+        if include_moneycontrol:
+            print("[ingest] Fetching Moneycontrol recommendations and buzzing stocks...")
+            mc_posts = self.fetch_moneycontrol()
+            all_posts.extend(mc_posts)
+            print(f"[ingest] Retrieved {len(mc_posts)} posts from Moneycontrol.")
+
+        # 6. X (Twitter)
+        if include_x_twitter:
+            print("[ingest] Fetching X (Twitter) breaking market chatter and cashtags...")
+            x_posts = self.fetch_x_twitter()
+            all_posts.extend(x_posts)
+            print(f"[ingest] Retrieved {len(x_posts)} posts from X (Twitter).")
 
         saved = self.save_posts(all_posts)
         print(f"[ingest] Saved {saved} total posts into local DuckDB.")

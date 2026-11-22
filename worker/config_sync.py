@@ -30,6 +30,8 @@ class PipelineConfig(BaseModel):
     valuepickr_enabled: bool = True
     tradingqna_enabled: bool = True
     stocktwits_enabled: bool = True
+    moneycontrol_enabled: bool = True
+    x_twitter_enabled: bool = True
     telegram_notifications: bool = False
     max_synthesize_tickers: int = 10
     watchlist_tickers: List[str] = Field(

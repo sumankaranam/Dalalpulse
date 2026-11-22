@@ -68,9 +68,11 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
             subreddits=config.subreddits,
             include_valuepickr=config.valuepickr_enabled,
             include_tradingqna=config.tradingqna_enabled,
-            include_stocktwits=config.stocktwits_enabled
+            include_stocktwits=config.stocktwits_enabled,
+            include_moneycontrol=getattr(config, "moneycontrol_enabled", True),
+            include_x_twitter=getattr(config, "x_twitter_enabled", True)
         )
-        log(f"   ✓ Ingestion complete: {total_scraped} raw posts stored.")
+        log(f"   ✓ Ingestion complete: {total_scraped} raw posts stored from Reddit, ValuePickr, TradingQnA, Stocktwits, Moneycontrol & X.")
 
         # Load recent posts for signal processing (past 7 days of discussion threads)
         df = ingestor.get_posts_df(days=7)

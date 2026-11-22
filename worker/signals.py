@@ -49,10 +49,13 @@ class SignalEngine:
                     "post_id": row["id"],
                     "ticker": sym,
                     "source": row["source"],
+                    "author": row.get("author", "anonymous"),
+                    "title": row.get("title", ""),
+                    "body": row.get("body", ""),
+                    "url": row.get("url", ""),
                     "score": int(row.get("score", 0)),
                     "num_comments": int(row.get("num_comments", 0)),
                     "sentiment_score": float(row.get("sentiment_score", 0.0)),
-                    "title": row.get("title", ""),
                     "created_utc": pd.to_datetime(row["created_utc"])
                 })
 
@@ -68,11 +71,11 @@ class SignalEngine:
         pdf["weighted_sentiment"] = pdf["sentiment_score"] * pdf["eng_weight"]
 
         # Classify sources into Personas:
-        # Retail: Reddit r/IndianStreetBets, r/DalalStreetTalks, Stocktwits
-        # Deep-Dive: ValuePickr, TradingQnA, r/IndiaInvestments
+        # Retail: Reddit r/IndianStreetBets, r/DalalStreetTalks, Stocktwits, X (Twitter)
+        # Deep-Dive: ValuePickr, TradingQnA, r/IndiaInvestments, Moneycontrol
         def classify_persona(src: str) -> str:
             s = src.lower()
-            if "valuepickr" in s or "tradingqna" in s or "indiainvestments" in s:
+            if "valuepickr" in s or "tradingqna" in s or "indiainvestments" in s or "moneycontrol" in s:
                 return "analyst"
             return "retail"
 
@@ -117,6 +120,43 @@ class SignalEngine:
             # Sample headlines
             headlines = group["title"].dropna().drop_duplicates().head(5).tolist()
 
+            # Exact verbatim forum & social quotations
+            exact_quotes = []
+            seen_quotes = set()
+            for _, p in group.sort_values(by="score", ascending=False).iterrows():
+                quote_text = (p.get("body") or p.get("title") or "").strip()
+                if not quote_text or quote_text in seen_quotes:
+                    continue
+                clean_quote = quote_text if len(quote_text) <= 400 else quote_text[:397] + "..."
+                seen_quotes.add(clean_quote)
+
+                # Format human readable source name
+                src_raw = str(p.get("source", "forum"))
+                src_display = (
+                    "Reddit r/IndianStreetBets" if "indianstreetbets" in src_raw.lower()
+                    else "Reddit r/IndiaInvestments" if "indiainvestments" in src_raw.lower()
+                    else "Reddit r/DalalStreetTalks" if "dalalstreettalks" in src_raw.lower()
+                    else "Reddit" if "reddit" in src_raw.lower()
+                    else "ValuePickr" if "valuepickr" in src_raw.lower()
+                    else "TradingQnA" if "tradingqna" in src_raw.lower()
+                    else "Stocktwits" if "stocktwits" in src_raw.lower()
+                    else "Moneycontrol" if "moneycontrol" in src_raw.lower()
+                    else "X (Twitter)" if "x_twitter" in src_raw.lower()
+                    else src_raw
+                )
+
+                exact_quotes.append({
+                    "source": src_display,
+                    "author": str(p.get("author", "trader")),
+                    "quote": clean_quote,
+                    "title": str(p.get("title", "")),
+                    "url": str(p.get("url", "")),
+                    "score": int(p.get("score", 0)),
+                    "created_at": p.get("created_utc").isoformat() if hasattr(p.get("created_utc"), "isoformat") else str(p.get("created_utc"))
+                })
+                if len(exact_quotes) >= 5:
+                    break
+
             # 14-day Z-Score computation
             z_score = self._compute_14d_zscore(ticker, mention_count, cutoff_14d)
 
@@ -154,6 +194,7 @@ class SignalEngine:
                 "risk_flags": risk_flags,
                 "sources_breakdown": sources_counts,
                 "sample_headlines": headlines,
+                "exact_quotes": exact_quotes,
                 "run_date": today.isoformat()
             })
 

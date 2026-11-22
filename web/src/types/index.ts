@@ -1,3 +1,13 @@
+export interface ForumQuote {
+  source: string;
+  author: string;
+  quote: string;
+  title?: string;
+  url: string;
+  score?: number;
+  created_at?: string;
+}
+
 export interface DailySignal {
   id: string;
   run_date: string;
@@ -13,6 +23,7 @@ export interface DailySignal {
   risk_flags: string[];
   sources_breakdown: Record<string, number>;
   sample_headlines: string[];
+  exact_quotes?: ForumQuote[];
   raw_synthesis?: {
     catalyst_summary?: string;
     retail_narrative?: string;
@@ -32,6 +43,8 @@ export interface PipelineConfig {
   valuepickr_enabled: boolean;
   tradingqna_enabled: boolean;
   stocktwits_enabled: boolean;
+  moneycontrol_enabled?: boolean;
+  x_twitter_enabled?: boolean;
   telegram_notifications: boolean;
   max_synthesize_tickers: number;
   watchlist_tickers: string[];

@@ -20,6 +20,8 @@ export default function SettingsPage() {
     valuepickr_enabled: true,
     tradingqna_enabled: true,
     stocktwits_enabled: true,
+    moneycontrol_enabled: true,
+    x_twitter_enabled: true,
     telegram_notifications: false,
     max_synthesize_tickers: 10,
     watchlist_tickers: ["RELIANCE", "TATAMOTORS", "HDFCBANK", "INFY", "ZOMATO", "SUZLON", "IRFC"],
@@ -75,6 +77,8 @@ export default function SettingsPage() {
           valuepickr_enabled: config.valuepickr_enabled,
           tradingqna_enabled: config.tradingqna_enabled,
           stocktwits_enabled: config.stocktwits_enabled,
+          moneycontrol_enabled: config.moneycontrol_enabled ?? true,
+          x_twitter_enabled: config.x_twitter_enabled ?? true,
           telegram_notifications: config.telegram_notifications,
           max_synthesize_tickers: config.max_synthesize_tickers,
           watchlist_tickers: config.watchlist_tickers,
@@ -392,6 +396,32 @@ export default function SettingsPage() {
               type="checkbox"
               checked={config.stocktwits_enabled}
               onChange={(e) => setConfig({ ...config, stocktwits_enabled: e.target.checked })}
+              className="w-4 h-4 accent-sky-400 rounded"
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-slate-200 font-medium block">Moneycontrol Buzz & Discussions</span>
+              <span className="text-[10px] text-slate-400">Buzzing stocks, retail targets & market commentary</span>
+            </div>
+            <input
+              type="checkbox"
+              checked={config.moneycontrol_enabled ?? true}
+              onChange={(e) => setConfig({ ...config, moneycontrol_enabled: e.target.checked })}
+              className="w-4 h-4 accent-sky-400 rounded"
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-slate-200 font-medium block">X (Twitter) Indian Equities</span>
+              <span className="text-[10px] text-slate-400">Breaking market tweets, viral retail sentiment & cashtags</span>
+            </div>
+            <input
+              type="checkbox"
+              checked={config.x_twitter_enabled ?? true}
+              onChange={(e) => setConfig({ ...config, x_twitter_enabled: e.target.checked })}
               className="w-4 h-4 accent-sky-400 rounded"
             />
           </div>

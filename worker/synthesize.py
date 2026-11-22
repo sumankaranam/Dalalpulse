@@ -32,8 +32,8 @@ class BriefSynthesizer:
         try:
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
-            # Try gemini-2.0-flash or gemini-1.5-flash
-            for m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+            # Try latest available Gemini models
+            for m in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]:
                 try:
                     self.client = genai.GenerativeModel(
                         model_name=m,
@@ -56,11 +56,17 @@ class BriefSynthesizer:
         sent = signal.get("sentiment_score", 0.0)
         divergence = signal.get("retail_vs_analyst_divergence", 0.0)
         headlines = signal.get("sample_headlines", [])
+        exact_quotes = signal.get("exact_quotes", [])
         signal_type = signal.get("signal_type", "Normal")
+
+        quote_snippets = [
+            f"[{q.get('source')} - @{q.get('author')}]: \"{q.get('quote')}\""
+            for q in exact_quotes[:4]
+        ]
 
         # Fallback if no Gemini client
         if not self.client:
-            return self._rule_based_synthesis(ticker, company_name, z_score, sent, divergence, headlines, signal_type)
+            return self._rule_based_synthesis(ticker, company_name, z_score, sent, divergence, headlines, signal_type, exact_quotes)
 
         prompt = f"""
 You are an expert Indian equities intelligence analyst evaluating social sentiment radar signals for NSE stock:
@@ -72,11 +78,13 @@ Retail vs Deep-Dive Divergence: {divergence:+.2f}
 Signal Category: {signal_type}
 Sample Retail & Forum Headlines:
 {json.dumps(headlines, indent=2)}
+Verbatim Retail & Forum Quotations:
+{json.dumps(quote_snippets, indent=2)}
 
 Synthesize a professional, concise intelligence brief in JSON with the exact following schema:
 {{
   "catalyst_summary": "2 clear sentences detailing what specific catalyst (earnings, order win, management commentary, sector rally, or viral rumor) is driving this retail chatter.",
-  "retail_narrative": "What retail speculators on Reddit/Stocktwits are betting on.",
+  "retail_narrative": "What retail speculators on Reddit/Stocktwits/X are betting on.",
   "fundamental_divergence": "Analysis of whether long-term/value investors on ValuePickr agree, or if this is retail FOMO.",
   "risk_flags": ["List", "of", "1 to 3", "concise key risk warnings"],
   "radar_verdict": "A 3-word summary (e.g. 'High Conviction Breakout', 'Speculative Hype Trap', 'Contrarian Value Dip')"
@@ -88,7 +96,7 @@ Synthesize a professional, concise intelligence brief in JSON with the exact fol
             return data
         except Exception as e:
             print(f"[synthesize] Gemini API error for {ticker}: {e}. Using deterministic synthesis.")
-            return self._rule_based_synthesis(ticker, company_name, z_score, sent, divergence, headlines, signal_type)
+            return self._rule_based_synthesis(ticker, company_name, z_score, sent, divergence, headlines, signal_type, exact_quotes)
 
     def _rule_based_synthesis(
         self,
@@ -98,15 +106,19 @@ Synthesize a professional, concise intelligence brief in JSON with the exact fol
         sent: float,
         divergence: float,
         headlines: List[str],
-        signal_type: str
+        signal_type: str,
+        exact_quotes: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Deterministic synthesis generator when running offline or without API quota."""
         catalyst = (
             f"Retail activity in {company_name} ({ticker}) surged with a {z_score:+.1f}σ mention spike. "
             f"Sentiment is currently {('bullish' if sent > 0.15 else ('bearish' if sent < -0.15 else 'neutral'))} "
-            f"driven by discussions around recent trading volumes and speculative retail interest."
+            f"driven by active discussions across retail communities and trading forums."
         )
-        if headlines:
+        if exact_quotes and len(exact_quotes) > 0:
+            top_q = exact_quotes[0]
+            catalyst += f" Top quoted retail focus ({top_q.get('source')}): \"{top_q.get('quote')[:120]}...\""
+        elif headlines:
             catalyst += f" Key discussion theme: '{headlines[0]}'."
 
         retail_narrative = (

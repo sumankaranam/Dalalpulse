@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { 
   TrendingUp, TrendingDown, Minus, Flame, AlertTriangle, 
-  MessageSquare, Users, ExternalLink, RefreshCw, ChevronDown, ChevronUp 
+  MessageSquare, Users, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Quote 
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { DailySignal } from "@/types";
@@ -243,7 +243,7 @@ export default function RadarPage() {
                   </div>
                 )}
 
-                {/* Accordion Expand for Sources & Headlines */}
+                {/* Accordion Expand for Sources, Quotations & Headlines */}
                 <button
                   onClick={() => setExpandedTicker(isExpanded ? null : s.id)}
                   className="w-full flex items-center justify-between mt-3 pt-2 text-[11px] text-slate-400 hover:text-slate-200 border-t border-slate-800/40"
@@ -253,27 +253,108 @@ export default function RadarPage() {
                     <span>{s.mention_count} Mentions</span>
                     {s.sources_breakdown && (
                       <span className="text-slate-500">
-                        ({Object.entries(s.sources_breakdown).map(([k, v]) => `${k.replace('reddit_r_', 'r/')}: ${v}`).join(', ')})
+                        ({Object.entries(s.sources_breakdown).map(([k, v]) => {
+                          const srcName = k.replace('reddit_r_', 'r/').replace('x_twitter', 'X/Twitter').replace('moneycontrol', 'Moneycontrol');
+                          return `${srcName}: ${v}`;
+                        }).join(', ')})
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center space-x-1">
-                    <span>{isExpanded ? "Hide Details" : "View Headlines"}</span>
+                  <div className="flex items-center space-x-1 text-sky-400 hover:text-sky-300 font-medium">
+                    <span>{isExpanded ? "Hide Discussions" : "View Exact Forum Quotes"}</span>
                     {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                   </div>
                 </button>
 
-                {isExpanded && s.sample_headlines && s.sample_headlines.length > 0 && (
-                  <div className="mt-2.5 bg-[#0B0F19] p-3 rounded-lg border border-slate-800 space-y-1.5 text-xs text-slate-300">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-1">
-                      Recent Forum Headlines
-                    </span>
-                    {s.sample_headlines.map((hl, i) => (
-                      <div key={i} className="flex items-start space-x-1.5">
-                        <span className="text-sky-500">•</span>
-                        <span className="leading-snug">{hl}</span>
+                {isExpanded && (
+                  <div className="mt-3 space-y-3 pt-2.5 border-t border-slate-800/80">
+                    {/* Exact Forum Quotations Section */}
+                    {s.exact_quotes && s.exact_quotes.length > 0 ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center space-x-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          <Quote className="w-3 h-3 text-sky-400" />
+                          <span>Verbatim Forum & Social Quotations</span>
+                        </div>
+                        <div className="space-y-2">
+                          {s.exact_quotes.map((q, idx) => {
+                            const srcLower = (q.source || "").toLowerCase();
+                            const isReddit = srcLower.includes("reddit");
+                            const isVP = srcLower.includes("valuepickr");
+                            const isTQ = srcLower.includes("tradingqna");
+                            const isMC = srcLower.includes("moneycontrol");
+                            const isX = srcLower.includes("x") || srcLower.includes("twitter");
+                            const isST = srcLower.includes("stocktwits");
+
+                            const badgeStyle = isReddit
+                              ? "bg-orange-950/70 border-orange-700/70 text-orange-300"
+                              : isVP
+                              ? "bg-blue-950/70 border-blue-700/70 text-blue-300"
+                              : isTQ
+                              ? "bg-purple-950/70 border-purple-700/70 text-purple-300"
+                              : isMC
+                              ? "bg-emerald-950/70 border-emerald-700/70 text-emerald-300"
+                              : isX
+                              ? "bg-slate-900 border-slate-600 text-slate-200"
+                              : isST
+                              ? "bg-amber-950/70 border-amber-700/70 text-amber-300"
+                              : "bg-slate-800 border-slate-700 text-slate-300";
+
+                            return (
+                              <div
+                                key={idx}
+                                className="bg-[#0B0F19] p-3 rounded-lg border border-slate-800/90 text-xs space-y-2 hover:border-slate-700 transition-colors"
+                              >
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <div className="flex items-center space-x-2">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${badgeStyle}`}>
+                                      {q.source}
+                                    </span>
+                                    <span className="text-slate-400 font-mono text-[11px]">@{q.author}</span>
+                                    {q.score !== undefined && q.score > 0 && (
+                                      <span className="text-slate-500 text-[10px]">↑ {q.score}</span>
+                                    )}
+                                  </div>
+                                  {q.url && (
+                                    <a
+                                      href={q.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center space-x-1 text-sky-400 hover:text-sky-300 text-[11px]"
+                                    >
+                                      <span>Original</span>
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  )}
+                                </div>
+
+                                <blockquote className="text-slate-200 italic border-l-2 border-slate-700 pl-2.5 leading-relaxed text-xs">
+                                  &ldquo;{q.quote}&rdquo;
+                                </blockquote>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    ))}
+                    ) : (
+                      <div className="text-[11px] text-slate-500 italic py-1">
+                        No verbatim quotes captured for this ticker in current window.
+                      </div>
+                    )}
+
+                    {/* Recent Forum Headlines */}
+                    {s.sample_headlines && s.sample_headlines.length > 0 && (
+                      <div className="bg-[#0B0F19] p-2.5 rounded-lg border border-slate-800 space-y-1.5 text-xs text-slate-300">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-1">
+                          Recent Headlines
+                        </span>
+                        {s.sample_headlines.map((hl, i) => (
+                          <div key={i} className="flex items-start space-x-1.5">
+                            <span className="text-sky-500">•</span>
+                            <span className="leading-snug">{hl}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
