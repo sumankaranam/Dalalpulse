@@ -1,0 +1,22 @@
+# DalalPulse Worker Core Dependencies
+# Core data and pipeline
+duckdb>=1.1.0
+supabase>=2.10.0
+pydantic>=2.8.0
+python-dotenv>=1.0.1
+requests>=2.32.0
+httpx>=0.27.0
+beautifulsoup4>=4.12.3
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Gemini frontier LLM
+google-generativeai>=0.8.3
+
+# GPU Funnel & NLP dependencies (Standard / CPU or CUDA)
+# For NVIDIA RTX 4050 Laptop (CUDA 12.4+), follow AGENTS.md:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# pip install transformers sentence-transformers
+# pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+transformers>=4.45.0
+sentence-transformers>=3.1.0
