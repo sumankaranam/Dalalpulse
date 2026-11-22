@@ -19,21 +19,21 @@ from pipeline import run_pipeline
 POLL_INTERVAL_SECONDS = int(os.getenv("WATCHER_POLL_INTERVAL", "60"))
 
 def start_watcher():
-    print(f"👀 DalalPulse Watcher active. Polling Supabase every {POLL_INTERVAL_SECONDS}s...")
+    print(f"👀 DalalPulse Watcher active. Polling Supabase every {POLL_INTERVAL_SECONDS}s...", flush=True)
     sync = SupabaseSync()
 
     while True:
         try:
             config = sync.fetch_config()
             if config.trigger_immediate_run:
-                print(f"\n⚡ Immediate run requested via Cloud Control Plane at {datetime.now().isoformat()}!")
+                print(f"\n⚡ Immediate run requested via Cloud Control Plane at {datetime.now().isoformat()}!", flush=True)
                 # Reset trigger first to prevent double-firing
                 sync.reset_immediate_trigger()
                 # Execute pipeline
                 run_pipeline(trigger_source="manual_web")
-                print(f"✅ On-demand pipeline completed. Resuming polling...")
+                print(f"✅ On-demand pipeline completed. Resuming polling...", flush=True)
         except Exception as e:
-            print(f"[watcher] Error during poll cycle: {e}")
+            print(f"[watcher] Error during poll cycle: {e}", flush=True)
 
         time.sleep(POLL_INTERVAL_SECONDS)
 
