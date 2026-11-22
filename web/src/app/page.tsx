@@ -1,55 +1,139 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { 
   TrendingUp, TrendingDown, Minus, Flame, AlertTriangle, 
-  MessageSquare, Users, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Quote 
+  MessageSquare, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Quote,
+  Star, Globe, Search, Zap, Sliders, CheckCircle2
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { DailySignal } from "@/types";
 
 export default function RadarPage() {
   const [signals, setSignals] = useState<DailySignal[]>([]);
+  const [watchlistTickers, setWatchlistTickers] = useState<string[]>([
+    "RELIANCE", "PERSISTENT", "IDFCFIRSTB", "ELGIEQUIP", "CYIENT", "ZEEL", "LATENTVIEW"
+  ]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | "watchlist" | "hype" | "bullish" | "bearish" | "divergent">("all");
+  const [activeView, setActiveView] = useState<"watchlist" | "market">("watchlist");
+  const [marketFilter, setMarketFilter] = useState<"all" | "hype" | "bullish" | "bearish" | "divergent">("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
+  const [triggeringMode, setTriggeringMode] = useState<string | null>(null);
+  const [triggerNotice, setTriggerNotice] = useState<string | null>(null);
 
-  const fetchSignals = async () => {
+  const fetchSignalsAndConfig = async () => {
     if (!supabase) {
       setLoading(false);
       return;
     }
     try {
-      const { data, error } = await supabase
+      // 1. Fetch Signals
+      const { data: signalData, error: signalErr } = await supabase
         .from("daily_signals")
         .select("*")
-        .order("mention_z_score", { ascending: false })
-        .limit(30);
+        .order("created_at", { ascending: false })
+        .limit(50);
 
-      if (!error && data) {
-        setSignals(data as DailySignal[]);
+      if (!signalErr && signalData) {
+        // Deduplicate to newest run per ticker
+        const seen = new Set<string>();
+        const uniqueSignals: DailySignal[] = [];
+        for (const s of signalData) {
+          if (!seen.has(s.ticker)) {
+            seen.add(s.ticker);
+            uniqueSignals.push(s as DailySignal);
+          }
+        }
+        setSignals(uniqueSignals);
+      }
+
+      // 2. Fetch Config for Watchlist Tickers
+      const { data: cfgData, error: cfgErr } = await supabase
+        .from("pipeline_config")
+        .select("watchlist_tickers, radar_mode")
+        .eq("id", 1)
+        .single();
+
+      if (!cfgErr && cfgData?.watchlist_tickers) {
+        setWatchlistTickers(cfgData.watchlist_tickers);
       }
     } catch (err) {
-      console.error("Error fetching signals:", err);
+      console.error("Error fetching signals/config:", err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchSignals();
-    const interval = setInterval(fetchSignals, 30000); // 30s auto-refresh
+    fetchSignalsAndConfig();
+    const interval = setInterval(fetchSignalsAndConfig, 30000); // 30s auto-refresh
     return () => clearInterval(interval);
   }, []);
 
-  const filteredSignals = signals.filter((s) => {
-    if (filter === "watchlist") return s.risk_flags?.includes("Watchlist Priority");
-    if (filter === "hype") return s.mention_z_score >= 2.0;
-    if (filter === "bullish") return s.sentiment_score > 0.15;
-    if (filter === "bearish") return s.sentiment_score < -0.15;
-    if (filter === "divergent") return Math.abs(s.retail_vs_analyst_divergence) > 0.4;
+  const triggerRun = async (mode: 'watchlist_only' | 'all_radar', targetTicker?: string) => {
+    if (!supabase || triggeringMode) return;
+    const modeKey = targetTicker || mode;
+    setTriggeringMode(modeKey);
+    try {
+      await supabase
+        .from("pipeline_config")
+        .update({
+          trigger_immediate_run: true,
+          radar_mode: mode,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", 1);
+
+      setTriggerNotice(
+        targetTicker 
+          ? `⚡ Worker triggered for ${targetTicker}! Polling forums and X now...` 
+          : mode === 'watchlist_only'
+          ? `⚡ Radar run queued exclusively for your ${watchlistTickers.length} Watchlist stocks!`
+          : "🌐 Full Market Scan queued across 2,600+ NSE stocks!"
+      );
+      setTimeout(() => setTriggerNotice(null), 6000);
+    } catch (err) {
+      console.error("Trigger error:", err);
+    } finally {
+      setTriggeringMode(null);
+    }
+  };
+
+  const watchlistSet = new Set(watchlistTickers.map((t) => t.toUpperCase().trim()));
+
+  // Filter signals according to active view & search query
+  const displayedSignals = signals.filter((s) => {
+    const sym = s.ticker.toUpperCase();
+    const name = (s.company_name || "").toLowerCase();
+    const query = searchQuery.trim().toLowerCase();
+
+    // Search query match
+    if (query && !sym.toLowerCase().includes(query) && !name.includes(query)) {
+      return false;
+    }
+
+    if (activeView === "watchlist") {
+      return watchlistSet.has(sym) || s.risk_flags?.includes("Watchlist Priority");
+    }
+
+    // In market view
+    if (marketFilter === "hype") return s.mention_z_score >= 2.0;
+    if (marketFilter === "bullish") return s.sentiment_score > 0.15;
+    if (marketFilter === "bearish") return s.sentiment_score < -0.15;
+    if (marketFilter === "divergent") return Math.abs(s.retail_vs_analyst_divergence) > 0.4;
     return true;
   });
+
+  // Identify watchlist tickers that don't have active signals yet
+  const activeWatchlistSymbols = new Set(
+    signals.filter((s) => watchlistSet.has(s.ticker.toUpperCase())).map((s) => s.ticker.toUpperCase())
+  );
+  const pendingWatchlistTickers = watchlistTickers.filter(
+    (t) => !activeWatchlistSymbols.has(t.toUpperCase()) &&
+      (!searchQuery || t.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
 
   const topZ = signals.length > 0 ? signals[0] : null;
   const avgSentiment = signals.length > 0
@@ -57,7 +141,7 @@ export default function RadarPage() {
     : "0.00";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Overview Metric Row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#121826] border border-radar-border p-3.5 rounded-xl">
@@ -79,13 +163,13 @@ export default function RadarPage() {
             </span>
             <span className="text-[11px] text-slate-400">(-1 to +1)</span>
           </div>
-          <span className="text-[11px] text-slate-500 block mt-0.5">Across flagged equities</span>
+          <span className="text-[11px] text-slate-500 block mt-0.5">Across active radar</span>
         </div>
 
         <div className="bg-[#121826] border border-radar-border p-3.5 rounded-xl">
-          <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Flagged Stocks</span>
-          <div className="text-lg font-bold text-white mt-1">{signals.length}</div>
-          <span className="text-[11px] text-slate-500 block mt-0.5">Exceeding threshold</span>
+          <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Watchlist Equities</span>
+          <div className="text-lg font-bold text-amber-400 mt-1">{watchlistTickers.length}</div>
+          <span className="text-[11px] text-slate-500 block mt-0.5">Personal stock radar</span>
         </div>
 
         <div className="bg-[#121826] border border-radar-border p-3.5 rounded-xl">
@@ -98,29 +182,145 @@ export default function RadarPage() {
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
-        {[
-          { key: "all", label: "All Tickers" },
-          { key: "watchlist", label: "⭐ Watchlist" },
-          { key: "hype", label: "🔥 Hype Spikes (≥2σ)" },
-          { key: "bullish", label: "🟢 Bullish" },
-          { key: "bearish", label: "🔴 Bearish" },
-          { key: "divergent", label: "⚡ Persona Divergence" },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setFilter(tab.key as any)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-              filter === tab.key
-                ? "bg-sky-500 text-slate-950 font-semibold shadow-sm"
-                : "bg-[#121826] text-slate-400 hover:text-slate-200 border border-radar-border"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+      {/* Trigger Feedback Toast */}
+      {triggerNotice && (
+        <div className="bg-sky-950/80 border border-sky-500/60 text-sky-200 p-3 rounded-xl flex items-center justify-between text-xs animate-in fade-in slide-in-from-top-1 duration-200">
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="w-4 h-4 text-sky-400 flex-shrink-0" />
+            <span className="font-medium">{triggerNotice}</span>
+          </div>
+          <span className="text-[10px] text-slate-400">Worker polling...</span>
+        </div>
+      )}
+
+      {/* Primary View Switcher: Watchlist vs Market */}
+      <div className="bg-[#121826] border border-radar-border p-1.5 rounded-xl flex items-center space-x-1">
+        <button
+          onClick={() => { setActiveView("watchlist"); setSearchQuery(""); }}
+          className={`flex-1 flex items-center justify-center space-x-2 py-2 rounded-lg text-xs font-bold transition-all ${
+            activeView === "watchlist"
+              ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm"
+              : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Star className={`w-3.5 h-3.5 ${activeView === "watchlist" ? "fill-amber-400 text-amber-400" : ""}`} />
+          <span>⭐ My Watchlist Only ({watchlistTickers.length})</span>
+        </button>
+
+        <button
+          onClick={() => { setActiveView("market"); setSearchQuery(""); }}
+          className={`flex-1 flex items-center justify-center space-x-2 py-2 rounded-lg text-xs font-bold transition-all ${
+            activeView === "market"
+              ? "bg-sky-500/20 text-sky-300 border border-sky-500/40 shadow-sm"
+              : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Globe className="w-3.5 h-3.5 text-sky-400" />
+          <span>🌐 Whole Market Discovery ({signals.length})</span>
+        </button>
       </div>
+
+      {/* Search & Action Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder={
+              activeView === "watchlist"
+                ? "Filter your watchlist (e.g. PERSISTENT, IDFCFIRSTB, RELIANCE)..."
+                : "Search any NSE stock across market results..."
+            }
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-[#121826] border border-radar-border rounded-xl pl-9 pr-9 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-[11px]"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {/* View-Specific Run Buttons */}
+        <div className="flex items-center space-x-2">
+          {activeView === "watchlist" ? (
+            <>
+              <button
+                onClick={() => triggerRun("watchlist_only")}
+                disabled={!!triggeringMode}
+                className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-semibold active:scale-95 transition-all"
+              >
+                {triggeringMode === "watchlist_only" ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Queuing Watchlist...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                    <span>Run Watchlist Only</span>
+                  </>
+                )}
+              </button>
+
+              <Link
+                href="/settings"
+                className="p-2 rounded-xl bg-[#121826] border border-radar-border text-slate-400 hover:text-slate-200 transition-colors"
+                title="Manage Watchlist Stocks"
+              >
+                <Sliders className="w-4 h-4" />
+              </Link>
+            </>
+          ) : (
+            <button
+              onClick={() => triggerRun("all_radar")}
+              disabled={!!triggeringMode}
+              className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/40 text-sky-300 text-xs font-semibold active:scale-95 transition-all"
+            >
+              {triggeringMode === "all_radar" ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Scanning Market...</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Run Full Market Scan</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Sub-Filters for Market View */}
+      {activeView === "market" && (
+        <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
+          {[
+            { key: "all", label: "All Tickers" },
+            { key: "hype", label: "🔥 Hype Spikes (≥2σ)" },
+            { key: "bullish", label: "🟢 Bullish" },
+            { key: "bearish", label: "🔴 Bearish" },
+            { key: "divergent", label: "⚡ Persona Divergence" },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setMarketFilter(tab.key as any)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+                marketFilter === tab.key
+                  ? "bg-sky-500 text-slate-950 font-semibold shadow-sm"
+                  : "bg-[#121826] text-slate-400 hover:text-slate-200 border border-radar-border"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Signals List */}
       {loading ? (
@@ -129,33 +329,51 @@ export default function RadarPage() {
             <div key={n} className="h-44 bg-[#121826]/60 border border-radar-border rounded-xl animate-pulse" />
           ))}
         </div>
-      ) : filteredSignals.length === 0 ? (
+      ) : displayedSignals.length === 0 && pendingWatchlistTickers.length === 0 ? (
         <div className="text-center py-12 bg-[#121826] border border-radar-border rounded-xl p-6">
           <Flame className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-          <h3 className="text-base font-semibold text-slate-200">No signals matching filter</h3>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1">
-            Trigger a manual run using the top button or wait for the scheduled 8:15 AM / 4:15 PM IST runs.
+          <h3 className="text-base font-semibold text-slate-200">
+            {activeView === "watchlist" ? "No signals yet for your watchlist stocks" : "No signals matching filter"}
+          </h3>
+          <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1 mb-4">
+            {activeView === "watchlist"
+              ? "Click 'Run Watchlist Only' to immediately pull forum posts and tweets for your stocks."
+              : "Trigger a manual market scan or adjust your search filter."}
           </p>
+          {activeView === "watchlist" && (
+            <button
+              onClick={() => triggerRun("watchlist_only")}
+              className="px-4 py-2 rounded-lg bg-amber-500 text-slate-950 text-xs font-bold shadow-md hover:bg-amber-400 transition-colors"
+            >
+              ⚡ Run Watchlist Only Now
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-3.5">
-          {filteredSignals.map((s) => {
+          {/* Active Signals Cards */}
+          {displayedSignals.map((s) => {
             const isExpanded = expandedTicker === s.id;
             const isBullish = s.sentiment_label === "Bullish";
             const isBearish = s.sentiment_label === "Bearish";
+            const isWatchlist = watchlistSet.has(s.ticker.toUpperCase()) || s.risk_flags?.includes("Watchlist Priority");
 
             return (
               <div
                 key={s.id}
-                className="bg-[#121826] border border-radar-border rounded-xl p-4 transition-all hover:border-slate-700 shadow-sm"
+                className={`bg-[#121826] border rounded-xl p-4 transition-all shadow-sm ${
+                  isWatchlist
+                    ? "border-amber-500/40 hover:border-amber-500/70"
+                    : "border-radar-border hover:border-slate-700"
+                }`}
               >
                 {/* Header Row */}
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="flex items-center space-x-2">
                       <h2 className="text-base font-bold text-white tracking-tight">{s.ticker}</h2>
-                      {s.risk_flags?.includes("Watchlist Priority") && (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-sky-950/80 border border-sky-500/80 text-sky-300">
+                      {isWatchlist && (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-950/80 border border-amber-500/80 text-amber-300">
                           ⭐ Watchlist
                         </span>
                       )}
@@ -360,6 +578,44 @@ export default function RadarPage() {
               </div>
             );
           })}
+
+          {/* Pending Watchlist Stock Tiles (Shown in Watchlist View) */}
+          {activeView === "watchlist" && pendingWatchlistTickers.length > 0 && (
+            <div className="pt-2 space-y-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block px-1">
+                Monitored Watchlist Stocks ({pendingWatchlistTickers.length})
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {pendingWatchlistTickers.map((ticker) => (
+                  <div
+                    key={ticker}
+                    className="bg-[#121826]/70 border border-dashed border-amber-500/30 rounded-xl p-3 flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center space-x-1.5">
+                        <span className="font-bold text-white text-sm">{ticker}</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/80 border border-amber-600/50 text-amber-300 font-semibold">
+                          ⭐ Watchlist
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400 block mt-0.5">
+                        Targeted monitoring ready
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={() => triggerRun("watchlist_only", ticker)}
+                      disabled={triggeringMode === ticker}
+                      className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium flex items-center space-x-1 active:scale-95 transition-all"
+                    >
+                      <Zap className="w-3 h-3 text-amber-400" />
+                      <span>{triggeringMode === ticker ? "Queuing..." : `Scan ${ticker}`}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

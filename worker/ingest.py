@@ -371,6 +371,150 @@ class DataIngestor:
 
         return posts
 
+    def fetch_targeted_watchlist_posts(self, tickers: List[str], max_per_ticker: int = 4) -> List[Dict[str, Any]]:
+        """Actively fetches targeted forum discussions, tweets, and news specifically for watchlist tickers."""
+        if not tickers:
+            return []
+
+        posts = []
+        headers = {"User-Agent": DEFAULT_USER_AGENT}
+        print(f"[ingest] Running targeted watchlist sentiment search for {len(tickers)} tickers: {tickers}...")
+
+        # Lazy import TickerMapper for company name lookup
+        from ticker_mapper import TickerMapper
+        tm = TickerMapper()
+
+        for raw_sym in tickers:
+            sym = raw_sym.strip().upper()
+            if not sym:
+                continue
+
+            full_name = tm.get_company_name(sym)
+            clean_name = re.sub(r'\s+(Limited|Ltd\.?|Corporation|Corp\.?|India|Bank)$', '', full_name, flags=re.IGNORECASE).strip()
+            if clean_name == sym:
+                clean_name = full_name
+
+            # 1. Targeted X / Twitter query
+            try:
+                q_x = f'(site:twitter.com+OR+site:x.com)+("${sym}"+OR+"{clean_name}")+when:14d'
+                resp = requests.get(f"https://news.google.com/rss/search?q={q_x}&hl=en-IN&gl=IN&ceid=IN:en", headers=headers, timeout=8)
+                if resp.status_code == 200:
+                    root = ET.fromstring(resp.content)
+                    for it in root.findall('.//item')[:max_per_ticker]:
+                        t = re.sub(r'\s*-\s*(?:X|Twitter)$', '', it.find('title').text or '', flags=re.IGNORECASE).strip()
+                        d = clean_html(it.find('description').text or '')
+                        l = it.find('link').text or ''
+                        dt_str = it.find('pubDate').text or ''
+                        try:
+                            created_dt = parsedate_to_datetime(dt_str)
+                        except Exception:
+                            created_dt = datetime.now(timezone.utc)
+                        pid = f"x_target_{hashlib.md5((l or t).encode()).hexdigest()[:12]}"
+                        posts.append({
+                            "id": pid,
+                            "source": "x_twitter",
+                            "external_id": pid,
+                            "author": "x_trader",
+                            "title": f"[{sym}] {t}",
+                            "body": d or t,
+                            "score": 15,
+                            "num_comments": 4,
+                            "created_utc": created_dt,
+                            "url": l
+                        })
+            except Exception as e:
+                print(f"[ingest] Targeted X search error for {sym}: {e}")
+
+            # 2. Targeted Reddit query
+            try:
+                q_red = f'site:reddit.com+("{clean_name}"+OR+"${sym}"+OR+"{sym}.NSE")+when:30d'
+                resp = requests.get(f"https://news.google.com/rss/search?q={q_red}&hl=en-IN&gl=IN&ceid=IN:en", headers=headers, timeout=8)
+                if resp.status_code == 200:
+                    root = ET.fromstring(resp.content)
+                    for it in root.findall('.//item')[:max_per_ticker]:
+                        t = re.sub(r'\s*-\s*Reddit$', '', it.find('title').text or '', flags=re.IGNORECASE).strip()
+                        d = clean_html(it.find('description').text or '')
+                        l = it.find('link').text or ''
+                        dt_str = it.find('pubDate').text or ''
+                        try:
+                            created_dt = parsedate_to_datetime(dt_str)
+                        except Exception:
+                            created_dt = datetime.now(timezone.utc)
+                        pid = f"red_target_{hashlib.md5((l or t).encode()).hexdigest()[:12]}"
+                        posts.append({
+                            "id": pid,
+                            "source": "reddit_r_indianstreetbets",
+                            "external_id": pid,
+                            "author": "reddit_investor",
+                            "title": f"[{sym}] {t}",
+                            "body": d or t,
+                            "score": 12,
+                            "num_comments": 3,
+                            "created_utc": created_dt,
+                            "url": l
+                        })
+            except Exception as e:
+                print(f"[ingest] Targeted Reddit search error for {sym}: {e}")
+
+            # 3. Targeted ValuePickr search
+            try:
+                vp_url = f"https://forum.valuepickr.com/search/query.json?term={sym}"
+                resp = requests.get(vp_url, headers=headers, timeout=8)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for p in data.get('posts', [])[:max_per_ticker]:
+                        blurb = clean_html(p.get('blurb', ''))
+                        topic_id = p.get('topic_id')
+                        pid = f"vp_target_{p.get('id', hashlib.md5(blurb.encode()).hexdigest()[:10])}"
+                        posts.append({
+                            "id": pid,
+                            "source": "valuepickr",
+                            "external_id": str(p.get('id', '')),
+                            "author": str(p.get('username', 'value_investor')),
+                            "title": f"[{sym}] ValuePickr Discussion on {clean_name}",
+                            "body": blurb,
+                            "score": int(p.get('like_count', 0)) + 5,
+                            "num_comments": 2,
+                            "created_utc": datetime.now(timezone.utc),
+                            "url": f"https://forum.valuepickr.com/t/{topic_id}"
+                        })
+            except Exception as e:
+                print(f"[ingest] Targeted ValuePickr search error for {sym}: {e}")
+
+            # 4. Targeted Moneycontrol search
+            try:
+                q_mc = f'site:moneycontrol.com+("{clean_name}"+OR+"{sym}")+("shares"+OR+"stock"+OR+"target"+OR+"results")+when:14d'
+                resp = requests.get(f"https://news.google.com/rss/search?q={q_mc}&hl=en-IN&gl=IN&ceid=IN:en", headers=headers, timeout=8)
+                if resp.status_code == 200:
+                    root = ET.fromstring(resp.content)
+                    for it in root.findall('.//item')[:max_per_ticker]:
+                        t = re.sub(r'\s*-\s*Moneycontrol(?:\.com)?$', '', it.find('title').text or '', flags=re.IGNORECASE).strip()
+                        d = clean_html(it.find('description').text or '')
+                        l = it.find('link').text or ''
+                        dt_str = it.find('pubDate').text or ''
+                        try:
+                            created_dt = parsedate_to_datetime(dt_str)
+                        except Exception:
+                            created_dt = datetime.now(timezone.utc)
+                        pid = f"mc_target_{hashlib.md5((l or t).encode()).hexdigest()[:12]}"
+                        posts.append({
+                            "id": pid,
+                            "source": "moneycontrol",
+                            "external_id": pid,
+                            "author": "moneycontrol_analyst",
+                            "title": f"[{sym}] {t}",
+                            "body": d or t,
+                            "score": 10,
+                            "num_comments": 1,
+                            "created_utc": created_dt,
+                            "url": l
+                        })
+            except Exception as e:
+                print(f"[ingest] Targeted Moneycontrol search error for {sym}: {e}")
+
+        print(f"[ingest] Retrieved {len(posts)} targeted posts for watchlist tickers.")
+        return posts
+
     def save_posts(self, posts: List[Dict[str, Any]]) -> int:
         """Upserts scraped posts into DuckDB."""
         if not posts:
@@ -404,47 +548,55 @@ class DataIngestor:
         include_tradingqna: bool = True,
         include_stocktwits: bool = True,
         include_moneycontrol: bool = True,
-        include_x_twitter: bool = True
+        include_x_twitter: bool = True,
+        watchlist_tickers: Optional[List[str]] = None
     ) -> int:
-        """Runs full ingestion across all configured sources."""
+        """Runs full ingestion across all configured sources + targeted watchlist search."""
         all_posts = []
 
-        # 1. Reddit
+        # 1. Targeted Watchlist Search (Prioritize user's monitored stocks)
+        if watchlist_tickers:
+            print(f"[ingest] Ingesting targeted discussions for watchlist: {watchlist_tickers}...")
+            targeted_posts = self.fetch_targeted_watchlist_posts(watchlist_tickers)
+            all_posts.extend(targeted_posts)
+            print(f"[ingest] Retrieved {len(targeted_posts)} targeted posts for watchlist.")
+
+        # 2. Reddit
         subs = subreddits or ["IndianStreetBets", "IndiaInvestments", "DalalStreetTalks"]
         print(f"[ingest] Fetching Reddit subreddits: {subs}...")
         reddit_posts = self.fetch_reddit(subs)
         all_posts.extend(reddit_posts)
         print(f"[ingest] Retrieved {len(reddit_posts)} posts from Reddit.")
 
-        # 2. ValuePickr
+        # 3. ValuePickr
         if include_valuepickr:
             print("[ingest] Fetching ValuePickr topics...")
             vp_posts = self.fetch_discourse("valuepickr", "https://forum.valuepickr.com")
             all_posts.extend(vp_posts)
             print(f"[ingest] Retrieved {len(vp_posts)} topics from ValuePickr.")
 
-        # 3. TradingQnA
+        # 4. TradingQnA
         if include_tradingqna:
             print("[ingest] Fetching TradingQnA topics...")
             tq_posts = self.fetch_discourse("tradingqna", "https://tradingqna.com")
             all_posts.extend(tq_posts)
             print(f"[ingest] Retrieved {len(tq_posts)} topics from TradingQnA.")
 
-        # 4. Stocktwits
+        # 5. Stocktwits
         if include_stocktwits:
             print("[ingest] Fetching Stocktwits messages...")
             st_posts = self.fetch_stocktwits()
             all_posts.extend(st_posts)
             print(f"[ingest] Retrieved {len(st_posts)} messages from Stocktwits.")
 
-        # 5. Moneycontrol
+        # 6. Moneycontrol
         if include_moneycontrol:
             print("[ingest] Fetching Moneycontrol recommendations and buzzing stocks...")
             mc_posts = self.fetch_moneycontrol()
             all_posts.extend(mc_posts)
             print(f"[ingest] Retrieved {len(mc_posts)} posts from Moneycontrol.")
 
-        # 6. X (Twitter)
+        # 7. X (Twitter)
         if include_x_twitter:
             print("[ingest] Fetching X (Twitter) breaking market chatter and cashtags...")
             x_posts = self.fetch_x_twitter()

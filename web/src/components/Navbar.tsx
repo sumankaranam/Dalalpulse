@@ -8,8 +8,8 @@ import { supabase } from "@/lib/supabase";
 
 export default function Navbar() {
   const pathname = usePathname();
-  const [triggering, setTriggering] = useState(false);
-  const [triggerSuccess, setTriggerSuccess] = useState(false);
+  const [triggeringMode, setTriggeringMode] = useState<string | null>(null);
+  const [triggerSuccess, setTriggerSuccess] = useState<string | null>(null);
   const [marketStatus, setMarketStatus] = useState("NSE Closed");
 
   useEffect(() => {
@@ -40,23 +40,27 @@ export default function Navbar() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleImmediateTrigger = async () => {
-    if (!supabase || triggering) return;
+  const handleImmediateTrigger = async (mode: 'watchlist_only' | 'all_radar') => {
+    if (!supabase || triggeringMode) return;
     try {
-      setTriggering(true);
+      setTriggeringMode(mode);
       const { error } = await supabase
         .from("pipeline_config")
-        .update({ trigger_immediate_run: true, updated_at: new Date().toISOString() })
+        .update({ 
+          trigger_immediate_run: true, 
+          radar_mode: mode,
+          updated_at: new Date().toISOString() 
+        })
         .eq("id", 1);
 
       if (!error) {
-        setTriggerSuccess(true);
-        setTimeout(() => setTriggerSuccess(false), 5000);
+        setTriggerSuccess(mode === 'watchlist_only' ? "Watchlist Queued!" : "Market Scan Queued!");
+        setTimeout(() => setTriggerSuccess(null), 5000);
       }
     } catch (err) {
       console.error("Trigger error:", err);
     } finally {
-      setTriggering(false);
+      setTriggeringMode(null);
     }
   };
 
@@ -86,30 +90,60 @@ export default function Navbar() {
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1.5">
+            {/* Watchlist Run Button */}
             <button
-              onClick={handleImmediateTrigger}
-              disabled={triggering}
-              className={`flex items-center space-x-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all ${
-                triggerSuccess
-                  ? "bg-emerald-950/80 border-emerald-500/40 text-emerald-300"
-                  : "bg-sky-500/10 hover:bg-sky-500/20 border-sky-500/30 text-sky-300 active:scale-95"
+              onClick={() => handleImmediateTrigger('watchlist_only')}
+              disabled={!!triggeringMode}
+              title="Run sentiment radar exclusively for your personal watchlist stocks"
+              className={`flex items-center space-x-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-all ${
+                triggerSuccess?.includes("Watchlist")
+                  ? "bg-emerald-950/90 border-emerald-500/50 text-emerald-300"
+                  : "bg-sky-500/10 hover:bg-sky-500/20 border-sky-500/40 text-sky-300 active:scale-95"
               }`}
             >
-              {triggering ? (
+              {triggeringMode === 'watchlist_only' ? (
                 <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Signaling...</span>
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <span>Running...</span>
                 </>
-              ) : triggerSuccess ? (
+              ) : triggerSuccess?.includes("Watchlist") ? (
                 <>
-                  <Zap className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400" />
-                  <span>Worker Queued!</span>
+                  <Zap className="w-3 h-3 text-emerald-400 fill-emerald-400" />
+                  <span>Queued!</span>
                 </>
               ) : (
                 <>
-                  <Zap className="w-3.5 h-3.5 text-sky-400" />
-                  <span>Run Now</span>
+                  <Zap className="w-3 h-3 text-sky-400" />
+                  <span>Run Watchlist</span>
+                </>
+              )}
+            </button>
+
+            {/* Market Run Button */}
+            <button
+              onClick={() => handleImmediateTrigger('all_radar')}
+              disabled={!!triggeringMode}
+              title="Run wide market scan across 2,600+ NSE stocks"
+              className={`hidden sm:flex items-center space-x-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-all ${
+                triggerSuccess?.includes("Market")
+                  ? "bg-emerald-950/90 border-emerald-500/50 text-emerald-300"
+                  : "bg-slate-800/80 hover:bg-slate-800 border-slate-700 text-slate-300 active:scale-95"
+              }`}
+            >
+              {triggeringMode === 'all_radar' ? (
+                <>
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <span>Scanning...</span>
+                </>
+              ) : triggerSuccess?.includes("Market") ? (
+                <>
+                  <Zap className="w-3 h-3 text-emerald-400 fill-emerald-400" />
+                  <span>Queued!</span>
+                </>
+              ) : (
+                <>
+                  <span>Scan Market</span>
                 </>
               )}
             </button>
