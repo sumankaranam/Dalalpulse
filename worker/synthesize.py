@@ -64,18 +64,25 @@ class BriefSynthesizer:
             for q in exact_quotes[:4]
         ]
 
+        deliv_pct = signal.get("delivery_pct")
+        confluence_verdict = signal.get("confluence_verdict")
+        announcement = signal.get("latest_announcement") or {}
+
         # Fallback if no Gemini client
         if not self.client:
-            return self._rule_based_synthesis(ticker, company_name, z_score, sent, divergence, headlines, signal_type, exact_quotes)
+            return self._rule_based_synthesis(ticker, company_name, z_score, sent, divergence, headlines, signal_type, exact_quotes, deliv_pct, confluence_verdict, announcement)
 
         prompt = f"""
-You are an expert Indian equities intelligence analyst evaluating social sentiment radar signals for NSE stock:
+You are an expert Indian equities intelligence analyst evaluating social sentiment and exchange delivery confluence for NSE stock:
 Ticker: {ticker}
 Company Name: {company_name}
 14-day Mention Z-Score: {z_score:+.2f} sigma
 Engagement-Weighted Sentiment: {sent:+.2f} (-1.0 to +1.0)
 Retail vs Deep-Dive Divergence: {divergence:+.2f}
 Signal Category: {signal_type}
+NSE Delivery Volume %: {deliv_pct}% (Above 45% = Institutional Accumulation, Below 28% = Day-Trader Churn)
+Confluence Verdict: {confluence_verdict}
+Latest Official NSE Regulatory Filing: {json.dumps(announcement)}
 Sample Retail & Forum Headlines:
 {json.dumps(headlines, indent=2)}
 Verbatim Retail & Forum Quotations:
@@ -83,11 +90,11 @@ Verbatim Retail & Forum Quotations:
 
 Synthesize a professional, concise intelligence brief in JSON with the exact following schema:
 {{
-  "catalyst_summary": "2 clear sentences detailing what specific catalyst (earnings, order win, management commentary, sector rally, or viral rumor) is driving this retail chatter.",
+  "catalyst_summary": "2 clear sentences detailing what specific catalyst (official filing, order win, earnings, sector rally, or viral rumor) is driving chatter, confirming whether exchange delivery volume backs this up.",
   "retail_narrative": "What retail speculators on Reddit/Stocktwits/X are betting on.",
-  "fundamental_divergence": "Analysis of whether long-term/value investors on ValuePickr agree, or if this is retail FOMO.",
+  "fundamental_divergence": "Analysis of whether long-term investors on ValuePickr and delivery figures agree, or if this is retail FOMO.",
   "risk_flags": ["List", "of", "1 to 3", "concise key risk warnings"],
-  "radar_verdict": "A 3-word summary (e.g. 'High Conviction Breakout', 'Speculative Hype Trap', 'Contrarian Value Dip')"
+  "radar_verdict": "A 3-word summary (e.g. 'Delivery-Backed Breakout', 'Speculative Hype Trap', 'Contrarian Value Dip')"
 }}
 """
         try:
@@ -96,7 +103,7 @@ Synthesize a professional, concise intelligence brief in JSON with the exact fol
             return data
         except Exception as e:
             print(f"[synthesize] Gemini API error for {ticker}: {e}. Using deterministic synthesis.")
-            return self._rule_based_synthesis(ticker, company_name, z_score, sent, divergence, headlines, signal_type, exact_quotes)
+            return self._rule_based_synthesis(ticker, company_name, z_score, sent, divergence, headlines, signal_type, exact_quotes, deliv_pct, confluence_verdict, announcement)
 
     def _rule_based_synthesis(
         self,
@@ -107,19 +114,30 @@ Synthesize a professional, concise intelligence brief in JSON with the exact fol
         divergence: float,
         headlines: List[str],
         signal_type: str,
-        exact_quotes: Optional[List[Dict[str, Any]]] = None
+        exact_quotes: Optional[List[Dict[str, Any]]] = None,
+        deliv_pct: Optional[float] = None,
+        confluence_verdict: Optional[str] = None,
+        announcement: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Deterministic synthesis generator when running offline or without API quota."""
         catalyst = (
-            f"Retail activity in {company_name} ({ticker}) surged with a {z_score:+.1f}σ mention spike. "
-            f"Sentiment is currently {('bullish' if sent > 0.15 else ('bearish' if sent < -0.15 else 'neutral'))} "
-            f"driven by active discussions across retail communities and trading forums."
+            f"Retail chatter in {company_name} ({ticker}) surged with a {z_score:+.1f}σ mention spike "
+            f"and {('bullish' if sent > 0.15 else ('bearish' if sent < -0.15 else 'neutral'))} sentiment."
         )
+        if announcement and announcement.get("desc"):
+            catalyst += f" Official NSE Filing ({announcement.get('date', '')[:11].strip()}): \"{announcement.get('desc')}\"."
+        
+        if deliv_pct is not None:
+            if deliv_pct >= 45.0:
+                catalyst += f" High delivery ({deliv_pct}%) confirms genuine accumulation."
+            elif deliv_pct < 28.0 and deliv_pct > 0:
+                catalyst += f" Caution: Low delivery ({deliv_pct}%) indicates heavy speculative day-trading churn."
+
         if exact_quotes and len(exact_quotes) > 0:
             top_q = exact_quotes[0]
-            catalyst += f" Top quoted retail focus ({top_q.get('source')}): \"{top_q.get('quote')[:120]}...\""
+            catalyst += f" Quoted focus ({top_q.get('source')}): \"{top_q.get('quote')[:100]}...\""
         elif headlines:
-            catalyst += f" Key discussion theme: '{headlines[0]}'."
+            catalyst += f" Key theme: '{headlines[0]}'."
 
         retail_narrative = (
             "Retail momentum traders are targeting short-term breakout potential and speculative swings."

@@ -5,7 +5,8 @@ import Link from "next/link";
 import { 
   TrendingUp, TrendingDown, Minus, Flame, AlertTriangle, 
   MessageSquare, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Quote,
-  Star, Globe, Search, Zap, Sliders, CheckCircle2, Clock, Activity, AlertCircle
+  Star, Globe, Search, Zap, Sliders, CheckCircle2, Clock, Activity, AlertCircle,
+  Building2, PackageCheck, ShieldAlert, Layers
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { DailySignal, RunLog } from "@/types";
@@ -17,7 +18,7 @@ export default function RadarPage() {
   ]);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<"watchlist" | "market">("watchlist");
-  const [marketFilter, setMarketFilter] = useState<"all" | "hype" | "bullish" | "bearish" | "divergent">("all");
+  const [marketFilter, setMarketFilter] = useState<"all" | "delivery_breakout" | "distribution_trap" | "official_filing" | "hype" | "bullish" | "divergent">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [triggeringMode, setTriggeringMode] = useState<string | null>(null);
@@ -38,7 +39,7 @@ export default function RadarPage() {
         .from("daily_signals")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(60);
 
       if (!signalErr && signalData) {
         // Deduplicate to newest run per ticker
@@ -135,9 +136,9 @@ export default function RadarPage() {
 
       setTriggerNotice(
         targetTicker 
-          ? `⚡ Worker triggered for ${targetTicker}! Polling Reddit, X, Moneycontrol now...` 
+          ? `⚡ Worker triggered for ${targetTicker}! Pulling NSE Delivery %, Filings, Forum & X posts...` 
           : mode === 'watchlist_only'
-          ? `⚡ Radar run queued exclusively for your ${watchlistTickers.length} Watchlist stocks!`
+          ? `⚡ Radar run queued with NSE Delivery & Filings for your ${watchlistTickers.length} Watchlist stocks!`
           : "🌐 Full Market Scan queued across 2,600+ NSE stocks!"
       );
       setTimeout(() => setTriggerNotice(null), 8000);
@@ -176,9 +177,11 @@ export default function RadarPage() {
     }
 
     // In market view
+    if (marketFilter === "delivery_breakout") return (s.delivery_pct || 0) >= 45.0 && s.sentiment_score > 0;
+    if (marketFilter === "distribution_trap") return (s.delivery_pct || 0) > 0 && (s.delivery_pct || 0) < 28.0;
+    if (marketFilter === "official_filing") return !!(s.latest_announcement && s.latest_announcement.desc);
     if (marketFilter === "hype") return s.mention_z_score >= 2.0;
     if (marketFilter === "bullish") return s.sentiment_score > 0.15;
-    if (marketFilter === "bearish") return s.sentiment_score < -0.15;
     if (marketFilter === "divergent") return Math.abs(s.retail_vs_analyst_divergence) > 0.4;
     return true;
   });
@@ -230,12 +233,12 @@ export default function RadarPage() {
         </div>
 
         <div className="bg-[#121826] border border-radar-border p-3.5 rounded-xl">
-          <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Control Plane</span>
+          <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Exchange Confluence</span>
           <div className="flex items-center space-x-1.5 text-xs font-semibold text-emerald-400 mt-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-            <span>Local GPU Synced</span>
+            <PackageCheck className="w-4 h-4 text-emerald-400" />
+            <span>NSE Delivery Synced</span>
           </div>
-          <span className="text-[11px] text-slate-500 block mt-0.5">AMD 7840HS + RTX 4050</span>
+          <span className="text-[11px] text-slate-500 block mt-0.5">Bhavcopy + Filings Active</span>
         </div>
       </div>
 
@@ -255,7 +258,7 @@ export default function RadarPage() {
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 mt-0.5">
-                Scraping Reddit, X (Twitter), Moneycontrol & ValuePickr → FinBERT sentiment scoring...
+                Ingesting Reddit, X, Moneycontrol, ValuePickr → NSE Delivery % & Filings → FinBERT scoring...
               </p>
             </div>
           </div>
@@ -412,9 +415,11 @@ export default function RadarPage() {
         <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
           {[
             { key: "all", label: "All Tickers" },
-            { key: "hype", label: "🔥 Hype Spikes (≥2σ)" },
+            { key: "delivery_breakout", label: "🔥 Delivery Breakout (≥45%)" },
+            { key: "distribution_trap", label: "⚠️ Distribution Trap (<28%)" },
+            { key: "official_filing", label: "🏛️ Official NSE Filings" },
+            { key: "hype", label: "📈 Hype Spikes (≥2σ)" },
             { key: "bullish", label: "🟢 Bullish" },
-            { key: "bearish", label: "🔴 Bearish" },
             { key: "divergent", label: "⚡ Persona Divergence" },
           ].map((tab) => (
             <button
@@ -468,6 +473,19 @@ export default function RadarPage() {
             const isBearish = s.sentiment_label === "Bearish";
             const isWatchlist = watchlistSet.has(s.ticker.toUpperCase()) || s.risk_flags?.includes("Watchlist Priority");
 
+            const delivPct = s.delivery_pct !== undefined && s.delivery_pct !== null ? Number(s.delivery_pct) : null;
+            const isHighDelivery = delivPct !== null && delivPct >= 45.0;
+            const isLowDelivery = delivPct !== null && delivPct < 28.0;
+
+            const confluenceVerdict = s.confluence_verdict || (
+              isHighDelivery && isBullish ? "Delivery-Confirmed Breakout"
+              : isLowDelivery && s.mention_z_score >= 2.0 ? "Retail Distribution Trap"
+              : s.signal_type
+            );
+
+            const isDeliveryBreakout = confluenceVerdict.includes("Breakout") || confluenceVerdict.includes("Confirmed");
+            const isDistributionTrap = confluenceVerdict.includes("Trap") || confluenceVerdict.includes("Distribution");
+
             return (
               <div
                 key={s.id}
@@ -480,8 +498,18 @@ export default function RadarPage() {
                 {/* Header Row */}
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <h2 className="text-base font-bold text-white tracking-tight">{s.ticker}</h2>
+                      {s.close_price && (
+                        <span className="text-xs font-mono font-semibold text-slate-200">
+                          ₹{s.close_price.toLocaleString("en-IN")}
+                          {s.price_change_pct !== undefined && s.price_change_pct !== null && (
+                            <span className={`ml-1 text-[11px] ${s.price_change_pct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                              ({s.price_change_pct >= 0 ? "+" : ""}{s.price_change_pct}%)
+                            </span>
+                          )}
+                        </span>
+                      )}
                       {isWatchlist && (
                         <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-950/80 border border-amber-500/80 text-amber-300">
                           ⭐ Watchlist
@@ -496,13 +524,21 @@ export default function RadarPage() {
                       }`}>
                         +{s.mention_z_score}σ Spike
                       </span>
-                      {s.signal_type !== "Normal" && (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
-                          {s.signal_type}
+
+                      {/* Confluence Verdict Pill */}
+                      {confluenceVerdict && (
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                          isDeliveryBreakout
+                            ? "bg-emerald-950/80 border-emerald-600/80 text-emerald-300"
+                            : isDistributionTrap
+                            ? "bg-rose-950/80 border-rose-600/80 text-rose-300"
+                            : "bg-sky-950/80 border-sky-700/80 text-sky-300"
+                        }`}>
+                          {confluenceVerdict}
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-slate-400 mt-0.5">{s.company_name}</p>
+                    <p className="text-xs text-slate-400 mt-1">{s.company_name}</p>
                   </div>
 
                   {/* Sentiment Gauge Pill */}
@@ -518,13 +554,41 @@ export default function RadarPage() {
                   </div>
                 </div>
 
+                {/* Official NSE Announcement Pill (if present) */}
+                {s.latest_announcement && s.latest_announcement.desc && (
+                  <div className="mt-2.5 bg-[#0B0F19] border border-blue-900/50 rounded-lg px-2.5 py-1.5 flex items-center justify-between text-[11px]">
+                    <div className="flex items-center space-x-1.5 text-blue-300 truncate">
+                      <Building2 className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                      <span className="font-semibold text-blue-200 flex-shrink-0">Official Filing:</span>
+                      <span className="text-slate-300 truncate">{s.latest_announcement.desc}</span>
+                      {s.latest_announcement.date && (
+                        <span className="text-slate-500 font-mono text-[10px] flex-shrink-0">
+                          ({s.latest_announcement.date.slice(0, 11)})
+                        </span>
+                      )}
+                    </div>
+                    {s.latest_announcement.file_url && (
+                      <a
+                        href={s.latest_announcement.file_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center space-x-1 text-sky-400 hover:text-sky-300 text-[10px] ml-2 flex-shrink-0 font-medium"
+                      >
+                        <span>Official PDF</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    )}
+                  </div>
+                )}
+
                 {/* AI Catalyst Brief */}
-                <p className="text-xs text-slate-200 mt-3 leading-relaxed">
+                <p className="text-xs text-slate-200 mt-2.5 leading-relaxed">
                   {s.catalyst_summary || "Automated retail discussion spike detected across trading forums."}
                 </p>
 
-                {/* Sentiment & Divergence Visual Meter */}
-                <div className="mt-3.5 pt-3 border-t border-slate-800/80 grid grid-cols-2 gap-3 text-[11px]">
+                {/* Confluence Metrics Grid: Sentiment, Retail Gap & NSE Delivery % */}
+                <div className="mt-3 pt-2.5 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px]">
+                  {/* Metric 1: Sentiment Meter */}
                   <div>
                     <span className="text-slate-400 block mb-1">Sentiment Meter</span>
                     <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden flex">
@@ -539,29 +603,67 @@ export default function RadarPage() {
                     </div>
                   </div>
 
+                  {/* Metric 2: Retail vs Deep-Dive Gap */}
                   <div>
-                    <span className="text-slate-400 block mb-1">Retail vs Deep-Dive Gap</span>
+                    <span className="text-slate-400 block mb-1">Retail vs Value Gap</span>
                     <div className="flex items-center space-x-1">
                       <span className={`font-mono font-medium ${Math.abs(s.retail_vs_analyst_divergence) > 0.4 ? 'text-amber-400' : 'text-slate-300'}`}>
                         {s.retail_vs_analyst_divergence > 0 ? `+${s.retail_vs_analyst_divergence}` : s.retail_vs_analyst_divergence}
                       </span>
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[10px] text-slate-500 truncate">
                         {s.retail_vs_analyst_divergence > 0.4
-                          ? "(Retail FOMO Trap)"
+                          ? "(Retail FOMO)"
                           : s.retail_vs_analyst_divergence < -0.4
                           ? "(Contrarian Dip)"
                           : "(Aligned)"}
                       </span>
                     </div>
                   </div>
+
+                  {/* Metric 3: Authoritative NSE Delivery % */}
+                  <div>
+                    <div className="flex items-center justify-between text-slate-400 mb-1">
+                      <span>NSE Delivery Volume</span>
+                      {delivPct !== null && (
+                        <span className={`font-mono font-semibold text-[10px] ${
+                          isHighDelivery ? "text-emerald-400" : isLowDelivery ? "text-rose-400" : "text-amber-300"
+                        }`}>
+                          {delivPct}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden flex">
+                      <div
+                        className={`h-full ${
+                          isHighDelivery ? "bg-emerald-500" : isLowDelivery ? "bg-rose-500" : "bg-amber-400"
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(5, delivPct || 0))}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[9px] text-slate-500 mt-0.5">
+                      <span>{isHighDelivery ? "Strong Hands" : isLowDelivery ? "Day-Traders" : "Normal Flow"}</span>
+                      {s.delivery_qty && (
+                        <span>{(s.delivery_qty / 100000).toFixed(1)}L deliv</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
-                {/* Risk Flags */}
-                {s.risk_flags && s.risk_flags.length > 0 && (
+                {/* Risk & Confluence Flags */}
+                {((s.risk_flags && s.risk_flags.length > 0) || (s.confluence_flags && s.confluence_flags.length > 0)) && (
                   <div className="flex flex-wrap gap-1.5 mt-3">
-                    {s.risk_flags.map((flag, idx) => (
+                    {(s.confluence_flags || []).map((flag, idx) => (
                       <span
-                        key={idx}
+                        key={`c-${idx}`}
+                        className="inline-flex items-center space-x-1 text-[10px] px-2 py-0.5 rounded bg-sky-950/60 border border-sky-800/70 text-sky-300"
+                      >
+                        <PackageCheck className="w-2.5 h-2.5 text-sky-400" />
+                        <span>{flag}</span>
+                      </span>
+                    ))}
+                    {(s.risk_flags || []).map((flag, idx) => (
+                      <span
+                        key={`r-${idx}`}
                         className="inline-flex items-center space-x-1 text-[10px] px-2 py-0.5 rounded bg-rose-950/40 border border-rose-900/60 text-rose-300"
                       >
                         <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />

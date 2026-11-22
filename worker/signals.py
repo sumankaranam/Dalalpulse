@@ -198,6 +198,34 @@ class SignalEngine:
                 "run_date": today.isoformat()
             })
 
+        # Enrich signals with Official NSE Exchange Data (Delivery % & Announcements)
+        try:
+            from exchange_data import ExchangeDataEngine
+            ex_engine = ExchangeDataEngine()
+            bhav_map = ex_engine.fetch_latest_bhavcopy()
+            for s in signals:
+                sym = s["ticker"].upper()
+                d_info = bhav_map.get(sym, {})
+                ann = ex_engine.fetch_corporate_announcement(sym)
+                confl = ex_engine.evaluate_confluence(
+                    ticker=sym,
+                    mention_z_score=s["mention_z_score"],
+                    sentiment_score=s["sentiment_score"],
+                    retail_vs_analyst_divergence=s["retail_vs_analyst_divergence"],
+                    delivery_info=d_info,
+                    announcement=ann
+                )
+                s["delivery_pct"] = d_info.get("delivery_pct")
+                s["delivery_qty"] = d_info.get("delivery_qty")
+                s["traded_qty"] = d_info.get("traded_qty")
+                s["close_price"] = d_info.get("close_price")
+                s["price_change_pct"] = d_info.get("price_change_pct")
+                s["latest_announcement"] = ann or {}
+                s["confluence_verdict"] = confl["confluence_verdict"]
+                s["confluence_flags"] = confl["confluence_flags"]
+        except Exception as e:
+            print(f"[signals] Warning: Exchange data enrichment error: {e}")
+
         # Sort so that watchlist priorities and highest Z-scores are at the top
         signals.sort(key=lambda x: (1 if "Watchlist Priority" in x["risk_flags"] else 0, x["mention_z_score"], x["mention_count"]), reverse=True)
         return signals

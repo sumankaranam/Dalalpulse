@@ -24,6 +24,19 @@ export interface DailySignal {
   sources_breakdown: Record<string, number>;
   sample_headlines: string[];
   exact_quotes?: ForumQuote[];
+  delivery_pct?: number;
+  delivery_qty?: number;
+  traded_qty?: number;
+  close_price?: number;
+  price_change_pct?: number;
+  latest_announcement?: {
+    desc?: string;
+    details?: string;
+    file_url?: string;
+    date?: string;
+  };
+  confluence_verdict?: string;
+  confluence_flags?: string[];
   raw_synthesis?: {
     catalyst_summary?: string;
     retail_narrative?: string;

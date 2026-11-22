@@ -134,7 +134,7 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
             watchlist_tickers=config.watchlist_tickers,
             radar_mode=config.radar_mode
         )
-        flagged_tickers_str = ", ".join([f"{s['ticker']} ({s['mention_z_score']:+.2f}σ, {s['signal_type']})" for s in raw_signals])
+        flagged_tickers_str = ", ".join([f"{s['ticker']} ({s['mention_z_score']:+.1f}σ, {s.get('confluence_verdict') or s['signal_type']}, {s.get('delivery_pct', 0)}% Deliv)" for s in raw_signals])
         log(f"   ✓ Identified {len(raw_signals)} signals: {flagged_tickers_str if flagged_tickers_str else 'None exceeding threshold'}")
 
         # Limit to top N for LLM synthesis
