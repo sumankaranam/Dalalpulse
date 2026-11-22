@@ -22,10 +22,13 @@ class SignalEngine:
         self,
         scored_posts: List[Dict[str, Any]],
         min_mentions: int = 3,
-        z_threshold: float = 1.5
+        z_threshold: float = 1.5,
+        watchlist_tickers: Optional[List[str]] = None,
+        radar_mode: str = "all_radar"
     ) -> List[Dict[str, Any]]:
         """
         Processes scored posts with detected tickers and computes mathematical signals.
+        Supports watchlist priority and watchlist_only filtering.
         """
         if not scored_posts:
             return []
@@ -34,6 +37,8 @@ class SignalEngine:
         df = pd.DataFrame(scored_posts)
         if "detected_tickers" not in df.columns or df.empty:
             return []
+
+        watchlist_set = set([t.upper().strip() for t in (watchlist_tickers or [])])
 
         # Explode detected tickers so each row represents (post, ticker)
         exploded_rows = []
@@ -82,8 +87,16 @@ class SignalEngine:
         signals = []
 
         for ticker, group in grouped:
+            is_watchlist = ticker in watchlist_set
+
+            # In watchlist_only mode, strictly skip non-watchlist stocks
+            if radar_mode == "watchlist_only" and not is_watchlist:
+                continue
+
             mention_count = len(group)
-            if mention_count < min_mentions:
+            # Watchlist stocks only require 1 mention to be tracked
+            req_mentions = 1 if is_watchlist else min_mentions
+            if mention_count < req_mentions:
                 continue
 
             # Engagement-weighted sentiment
@@ -125,6 +138,9 @@ class SignalEngine:
             elif divergence < -0.45:
                 signal_type = "Contrarian Accumulation"
 
+            if is_watchlist:
+                risk_flags.insert(0, "Watchlist Priority")
+
             sentiment_label = "Bullish" if eng_sentiment > 0.15 else ("Bearish" if eng_sentiment < -0.15 else "Neutral")
 
             signals.append({
@@ -141,8 +157,8 @@ class SignalEngine:
                 "run_date": today.isoformat()
             })
 
-        # Sort by mention_z_score descending
-        signals.sort(key=lambda x: (x["mention_z_score"], x["mention_count"]), reverse=True)
+        # Sort so that watchlist priorities and highest Z-scores are at the top
+        signals.sort(key=lambda x: (1 if "Watchlist Priority" in x["risk_flags"] else 0, x["mention_z_score"], x["mention_count"]), reverse=True)
         return signals
 
     def _compute_14d_zscore(self, ticker: str, today_count: int, cutoff_date) -> float:

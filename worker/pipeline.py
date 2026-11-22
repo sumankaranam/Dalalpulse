@@ -122,12 +122,14 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
         # Step 4: Mathematical Signal Computation
         # Adaptive threshold: allow tickers with 2+ mentions to be scored and presented
         effective_min_mentions = max(2, min(config.min_mention_threshold, 2))
-        log(f"📊 [Step 4/5] Computing 14d Z-Scores, Weighted Sentiment & Persona Divergence (min mentions: {effective_min_mentions})...")
+        log(f"📊 [Step 4/5] Computing 14d Z-Scores & Sentiment (Mode: {config.radar_mode}, Watchlist: {len(config.watchlist_tickers)} tickers)...")
         signal_engine = SignalEngine(db_path=ingestor.db_path)
         raw_signals = signal_engine.compute_daily_signals(
             scored_posts=scored_posts,
             min_mentions=effective_min_mentions,
-            z_threshold=float(config.z_score_threshold)
+            z_threshold=float(config.z_score_threshold),
+            watchlist_tickers=config.watchlist_tickers,
+            radar_mode=config.radar_mode
         )
         flagged_tickers_str = ", ".join([f"{s['ticker']} ({s['mention_z_score']:+.2f}σ, {s['signal_type']})" for s in raw_signals])
         log(f"   ✓ Identified {len(raw_signals)} signals: {flagged_tickers_str if flagged_tickers_str else 'None exceeding threshold'}")

@@ -32,6 +32,10 @@ class PipelineConfig(BaseModel):
     stocktwits_enabled: bool = True
     telegram_notifications: bool = False
     max_synthesize_tickers: int = 10
+    watchlist_tickers: List[str] = Field(
+        default_factory=lambda: ["RELIANCE", "TATAMOTORS", "HDFCBANK", "INFY", "ZOMATO", "SUZLON", "IRFC"]
+    )
+    radar_mode: str = "all_radar"  # "all_radar" or "watchlist_only"
     updated_at: Optional[datetime] = None
 
 class SupabaseSync:

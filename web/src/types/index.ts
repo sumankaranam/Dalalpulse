@@ -34,6 +34,8 @@ export interface PipelineConfig {
   stocktwits_enabled: boolean;
   telegram_notifications: boolean;
   max_synthesize_tickers: number;
+  watchlist_tickers: string[];
+  radar_mode: 'all_radar' | 'watchlist_only';
   updated_at?: string;
 }
 

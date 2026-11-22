@@ -11,7 +11,7 @@ import { DailySignal } from "@/types";
 export default function RadarPage() {
   const [signals, setSignals] = useState<DailySignal[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | "hype" | "bullish" | "bearish" | "divergent">("all");
+  const [filter, setFilter] = useState<"all" | "watchlist" | "hype" | "bullish" | "bearish" | "divergent">("all");
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
 
   const fetchSignals = async () => {
@@ -43,6 +43,7 @@ export default function RadarPage() {
   }, []);
 
   const filteredSignals = signals.filter((s) => {
+    if (filter === "watchlist") return s.risk_flags?.includes("Watchlist Priority");
     if (filter === "hype") return s.mention_z_score >= 2.0;
     if (filter === "bullish") return s.sentiment_score > 0.15;
     if (filter === "bearish") return s.sentiment_score < -0.15;
@@ -101,6 +102,7 @@ export default function RadarPage() {
       <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
         {[
           { key: "all", label: "All Tickers" },
+          { key: "watchlist", label: "⭐ Watchlist" },
           { key: "hype", label: "🔥 Hype Spikes (≥2σ)" },
           { key: "bullish", label: "🟢 Bullish" },
           { key: "bearish", label: "🔴 Bearish" },
@@ -152,6 +154,11 @@ export default function RadarPage() {
                   <div>
                     <div className="flex items-center space-x-2">
                       <h2 className="text-base font-bold text-white tracking-tight">{s.ticker}</h2>
+                      {s.risk_flags?.includes("Watchlist Priority") && (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-sky-950/80 border border-sky-500/80 text-sky-300">
+                          ⭐ Watchlist
+                        </span>
+                      )}
                       <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${
                         s.mention_z_score >= 2.5
                           ? "bg-rose-950/60 border-rose-800 text-rose-300"
