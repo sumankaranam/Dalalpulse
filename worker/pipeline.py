@@ -46,6 +46,8 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
     print(f"========================================================")
     
     config: PipelineConfig = sync.fetch_config()
+    # Reset immediate trigger flag in Supabase so it doesn't loop
+    sync.reset_immediate_trigger()
     run_id = sync.create_run_log(trigger_source=trigger_source)
     
     logs = []
@@ -70,8 +72,8 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
         )
         log(f"   ✓ Ingestion complete: {total_scraped} raw posts stored.")
 
-        # Load recent posts for signal processing (last 48 hours to capture active discussion threads)
-        df = ingestor.get_posts_df(days=2)
+        # Load recent posts for signal processing (past 7 days of discussion threads)
+        df = ingestor.get_posts_df(days=7)
         if df.empty:
             log("⚠️ No recent posts available in local DuckDB to process.")
             sync.update_run_log(run_id, status="success", posts_scraped=total_scraped, duration_seconds=time.time() - start_time, logs="\n".join(logs))
@@ -82,6 +84,7 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
         mapper = TickerMapper()
         posts_with_tickers = []
         unique_tickers_detected = set()
+        ticker_counts = {}
 
         for _, row in df.iterrows():
             content = f"{row.get('title', '')} {row.get('body', '')}"
@@ -92,10 +95,14 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
                 post_dict["detected_tickers"] = syms
                 for s in syms:
                     unique_tickers_detected.add(s)
+                    ticker_counts[s] = ticker_counts.get(s, 0) + 1
                 posts_with_tickers.append(post_dict)
 
         total_detected = len(unique_tickers_detected)
+        sorted_counts = sorted(ticker_counts.items(), key=lambda x: x[1], reverse=True)
+        tickers_summary = ", ".join([f"{k} ({v})" for k, v in sorted_counts[:15]])
         log(f"   ✓ Detected {total_detected} unique NSE tickers across {len(posts_with_tickers)} posts.")
+        log(f"   📌 Scanned Tickers: {tickers_summary if tickers_summary else 'None'}")
 
         if not posts_with_tickers:
             log("ℹ️ No ticker mentions detected in today's batch.")
@@ -113,14 +120,17 @@ def run_pipeline(trigger_source: str = "scheduled") -> Dict[str, Any]:
         log(f"   ✓ GPU Funnel complete. Peak VRAM: {peak_vram_mb:.1f} MB.")
 
         # Step 4: Mathematical Signal Computation
-        log(f"📊 [Step 4/5] Computing 14d Z-Scores, Weighted Sentiment & Persona Divergence...")
+        # Adaptive threshold: allow tickers with 2+ mentions to be scored and presented
+        effective_min_mentions = max(2, min(config.min_mention_threshold, 2))
+        log(f"📊 [Step 4/5] Computing 14d Z-Scores, Weighted Sentiment & Persona Divergence (min mentions: {effective_min_mentions})...")
         signal_engine = SignalEngine(db_path=ingestor.db_path)
         raw_signals = signal_engine.compute_daily_signals(
             scored_posts=scored_posts,
-            min_mentions=config.min_mention_threshold,
+            min_mentions=effective_min_mentions,
             z_threshold=float(config.z_score_threshold)
         )
-        log(f"   ✓ Identified {len(raw_signals)} high-confidence signals exceeding threshold.")
+        flagged_tickers_str = ", ".join([f"{s['ticker']} ({s['mention_z_score']:+.2f}σ, {s['signal_type']})" for s in raw_signals])
+        log(f"   ✓ Identified {len(raw_signals)} signals: {flagged_tickers_str if flagged_tickers_str else 'None exceeding threshold'}")
 
         # Limit to top N for LLM synthesis
         top_signals = raw_signals[:config.max_synthesize_tickers]

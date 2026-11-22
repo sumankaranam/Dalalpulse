@@ -128,7 +128,7 @@ class DataIngestor:
                 for t in topics:
                     tid = str(t.get("id"))
                     pid = f"{name}_{tid}"
-                    created_raw = t.get("created_at")
+                    created_raw = t.get("last_posted_at") or t.get("bumped_at") or t.get("created_at")
                     try:
                         created_dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
                     except Exception:

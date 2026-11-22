@@ -32,27 +32,22 @@ class BriefSynthesizer:
         try:
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
-            # Try gemini-2.5-flash or gemini-1.5-flash
-            model_name = "gemini-2.5-flash"
-            self.client = genai.GenerativeModel(
-                model_name=model_name,
-                generation_config={
-                    "response_mime_type": "application/json",
-                    "temperature": 0.2
-                }
-            )
-            print(f"[synthesize] Gemini client initialized with {model_name}.")
+            # Try gemini-2.0-flash or gemini-1.5-flash
+            for m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+                try:
+                    self.client = genai.GenerativeModel(
+                        model_name=m,
+                        generation_config={
+                            "response_mime_type": "application/json",
+                            "temperature": 0.2
+                        }
+                    )
+                    print(f"[synthesize] Gemini client initialized with {m}.")
+                    break
+                except Exception:
+                    continue
         except Exception as e:
-            print(f"[synthesize] Notice: Could not init gemini-2.5-flash ({e}), trying gemini-1.5-flash...")
-            try:
-                import google.generativeai as genai
-                self.client = genai.GenerativeModel(
-                    model_name="gemini-1.5-flash",
-                    generation_config={"response_mime_type": "application/json", "temperature": 0.2}
-                )
-                print("[synthesize] Gemini client initialized with gemini-1.5-flash.")
-            except Exception as e2:
-                print(f"[synthesize] Gemini client initialization error: {e2}")
+            print(f"[synthesize] Gemini client initialization error: {e}")
 
     def synthesize_ticker(self, signal: Dict[str, Any], company_name: str) -> Dict[str, Any]:
         """Generates AI brief for an individual flagged ticker."""

@@ -265,19 +265,23 @@ class TickerMapper:
         self.company_names: Dict[str, str] = dict(NSE_COMPANY_NAMES)
         self.ambiguous_tickers: Set[str] = set(AMBIGUOUS_TICKERS)
         
-        # Load local or custom equity file if provided
-        if custom_equity_file and Path(custom_equity_file).exists():
-            self._load_equity_csv(custom_equity_file)
+        # Load default or custom EQUITY_L.csv if available
+        equity_file = custom_equity_file or (Path(__file__).resolve().parent / "EQUITY_L.csv")
+        if Path(equity_file).exists():
+            self._load_equity_csv(str(equity_file))
 
         # Build regex patterns
-        # 1. Exact Cashtags: $TICKER or #TICKER (unambiguous, accepts even short tickers)
+        # 1. Exact Cashtags: $TICKER or #TICKER
         self.cashtag_pattern = re.compile(r'[$#]([A-Za-z0-9\-&]+)\b')
         
-        # 2. Uppercase symbols (word boundary, 3-14 chars)
+        # 2. Stocktwits tags: [SYMBOL.NSE] or SYMBOL.NSE
+        self.stocktwits_tag_pattern = re.compile(r'\[?([A-Za-z0-9\-&]+)\.(?:NSE|BSE)\]?', re.IGNORECASE)
+
+        # 3. Uppercase symbols (word boundary, 3-14 chars)
         self.uppercase_symbol_pattern = re.compile(r'\b([A-Z]{3,14}(?:-[A-Z0-9]+)?)\b')
 
     def _load_equity_csv(self, file_path: str):
-        """Optionally parses NSE EQUITY_L.csv to expand symbols list."""
+        """Parses NSE EQUITY_L.csv to expand symbols and company name aliases."""
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -290,6 +294,17 @@ class TickerMapper:
                             self.symbols.add(sym)
                             if sym not in self.company_names:
                                 self.company_names[sym] = name
+                            
+                            # Clean company name into an alias
+                            # e.g. "Zaggle Prepaid Ocean Services Limited" -> "zaggle prepaid", "zaggle"
+                            clean_name = re.sub(r'\b(limited|ltd|industries|india|corp|corporation)\b', '', name, flags=re.IGNORECASE).strip()
+                            clean_lower = clean_name.lower().strip()
+                            if len(clean_lower) >= 4 and clean_lower not in self.aliases:
+                                self.aliases[clean_lower] = sym
+                            
+                            first_word = clean_lower.split()[0] if clean_lower else ""
+                            if len(first_word) >= 5 and first_word not in self.aliases and first_word.upper() not in self.ambiguous_tickers:
+                                self.aliases[first_word] = sym
         except Exception as e:
             print(f"[ticker_mapper] Notice: Could not read custom equity CSV: {e}")
 
@@ -307,21 +322,31 @@ class TickerMapper:
         detected: List[Tuple[str, str]] = []
         text_lower = text.lower()
 
-        # Step 1: Detect explicit Cashtags ($RELIANCE, #INFY, $ITC)
-        for match in self.cashtag_pattern.finditer(text):
+        # Step 1: Detect Stocktwits tags ([MARUTI.NSE], BAJFINANCE.NSE)
+        for match in self.stocktwits_tag_pattern.finditer(text):
             token = match.group(1).upper()
             if token in self.symbols or token.lower() in self.aliases:
                 sym = token if token in self.symbols else self.aliases[token.lower()]
                 detected.append((sym, match.group(0)))
 
-        # Step 2: Multi-word & single-word alias matching (e.g. 'tata motors', 'ril', 'jio fin')
+        # Step 2: Detect explicit Cashtags ($RELIANCE, #INFY, $ITC)
+        for match in self.cashtag_pattern.finditer(text):
+            token = match.group(1).upper()
+            if token.endswith(".NSE") or token.endswith(".BSE"):
+                token = token.split(".")[0]
+            if token in self.symbols or token.lower() in self.aliases:
+                sym = token if token in self.symbols else self.aliases[token.lower()]
+                detected.append((sym, match.group(0)))
+
+        # Step 3: Multi-word & single-word alias matching (e.g. 'tata motors', 'ril', 'jio fin')
         for alias, symbol in sorted(self.aliases.items(), key=lambda x: len(x[0]), reverse=True):
-            # Check whole phrase boundaries
+            if len(alias) < 3:
+                continue
             pattern = rf'\b{re.escape(alias)}\b'
             if re.search(pattern, text_lower):
                 detected.append((symbol, alias))
 
-        # Step 3: Uppercase ticker tokens (e.g. INFY, ZOMATO, TCS, SUZLON)
+        # Step 4: Uppercase ticker tokens (e.g. INFY, ZOMATO, TCS, SUZLON)
         for match in self.uppercase_symbol_pattern.finditer(text):
             token = match.group(1)
             # Skip common English words unless matched via cashtags or alias
